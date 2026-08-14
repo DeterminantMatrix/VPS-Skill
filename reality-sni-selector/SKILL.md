@@ -85,10 +85,10 @@ Keep about 5-12 plausible candidates for the cheap probe. Broad scans must run a
 Use the bundled probe from the production VPS against only the shortlist:
 
 ```bash
-python3 scripts/probe_target.py --family ipv4 --vps-asn <VPS_ASN> <DOMAIN...>
+python3 scripts/probe_target.py --family ipv4 <DOMAIN...>
 ```
 
-Use the production address family.
+Use the production address family. Resolve the VPS public ASN once from a trusted source or the VPS public IP, then compare it with the per-address ASN evidence reported by the probe.
 
 Record:
 
@@ -98,7 +98,7 @@ Record:
 - X25519;
 - remote IP;
 - CNAME chain and ASN/provider evidence;
-- whether all observed target addresses are in the same ASN as the VPS;
+- whether the observed target ASN(s) match the VPS ASN;
 - CDN/shared-front-door status;
 - redirect status;
 - high-risk target warning.
@@ -215,7 +215,7 @@ Rules:
 
 - Preference fit never changes S/A/B/C.
 - Preference fit never rescues a CDN/shared-front-door or other C candidate.
-- Same ASN is stronger than institution type because it directly improves network topology plausibility, but it remains only a tie-breaker.
+- Same ASN is stronger than institution type because it directly improves network-topology plausibility, but it remains only a tie-breaker.
 - Do not infer institution type from `.edu`, `.org`, or a brand-like name alone. Use verified organization identity.
 - If candidates have the same grade and Preference fit, prefer higher REALITY success, then lower TLS worst-case latency, then the working incumbent.
 
