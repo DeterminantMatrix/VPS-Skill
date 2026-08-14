@@ -1,188 +1,243 @@
 ---
 name: reality-sni-selector
-description: Compare, validate, and optionally roll out REALITY target/SNI profiles for VPS nodes using Xray, sing-box, mihomo, x-ui/3x-ui, or ShellCrash. Use when selecting or replacing REALITY serverName/target/dest/handshake.server, comparing candidate domains, checking REALITY compatibility, investigating target-specific handshake failures, or safely changing a production REALITY SNI.
+description: Compare, validate, grade, and optionally roll out REALITY target/SNI profiles for VPS nodes using Xray, sing-box, mihomo, x-ui/3x-ui, or ShellCrash. Use when selecting or replacing REALITY serverName/target/dest/handshake.server, comparing candidate domains, checking REALITY compatibility, investigating target-specific handshake failures, or reducing known GFW-blocking risks for a production REALITY node.
 ---
 
 # REALITY SNI Selector
 
 ## Goal
 
-Choose a REALITY target/SNI that works with the user's actual server core, client core, network path, and fingerprint. Keep the workflow short and evidence-driven.
+Choose a stable REALITY target/SNI for the user's actual server, client, and network path while minimizing known deployment risks. Keep the workflow short and fail fast.
 
-Treat a candidate as a **profile**, not just a domain:
+A grade estimates production suitability for the tested profile. It does not guarantee that a VPS will never be detected or blocked.
+
+Treat each candidate as a profile:
 
 ```text
-(target host:port, SNI, server core/version, client core/version, fingerprint, address family)
+(target host:port, SNI, server core/version, client core/version, fingerprint, address family, client network path)
 ```
 
-A domain is not good or bad in isolation. Implementation interoperability can change the result.
+## Hard rules
 
-## Core rules
-
-- Keep the incumbent as the control whenever it currently works.
+- Keep the working incumbent as the control.
 - Preserve exact hostnames. Do not silently add or remove `www`.
-- Keep server `target`/`dest`/`handshake.server` and allowed/client `serverName` consistent unless the implementation intentionally separates them.
-- Prefer the XTLS target profile: TLS 1.3, ALPN `h2`, valid certificate for the SNI, and X25519 compatibility.
-- A wildcard certificate is not an automatic rejection if normal certificate verification accepts the requested SNI.
-- **Strict no-CDN policy:** confirmed CDN or shared platform front doors are a hard rejection. This includes Cloudflare, CloudFront/AWS shared fronts, Akamai, Fastly, Azure Front Door/CDN, and comparable shared edge services.
-- Decide CDN/front-door status from DNS/CNAME, resolved IP/ASN/provider, and other concrete network evidence. Do not reject by brand-like substrings alone.
-- If CDN/front-door status is still unknown, the candidate cannot be Primary until it is verified as direct.
-- Redirects, famous/sensitive brands, network distance, and wildcard certificates remain risk or tie-breaker evidence unless they cause an actual protocol/config failure.
-- Do not rank a target from scanner output alone. For finalists, test REALITY with the actual core pair when possible.
-- If every candidate fails similarly, investigate core/version/fingerprint/config interoperability before blaming the SNI.
-- Do not expose UUIDs, private keys, short IDs, proxy passwords, panel credentials, tokens, or full secret-bearing configs.
+- Keep server target/dest/handshake.server and allowed/client serverName consistent unless the implementation intentionally separates them.
+- Require TLS 1.3, ALPN h2, normal certificate/SNI verification, and X25519 compatibility.
+- Confirm the target is direct/non-CDN before it can become a finalist.
+- Reject confirmed shared CDN or platform front doors, including Cloudflare, CloudFront/AWS shared fronts, Akamai, Fastly, Azure Front Door/CDN, and comparable shared edge services.
+- Treat unknown CDN/front-door status as unverified. It cannot be Primary or receive S/A.
+- In strict GFW-risk mode, require the production REALITY listener to use TCP/443 before any candidate can receive S/A/B. A non-443 production listener makes the current deployment grade C until corrected.
+- Reject targets explicitly matching current Xray high-risk warning patterns: `.cn`, `.ru`, `.ir`, or hostnames containing `apple`, `icloud`, or `microsoft`.
+- Reject unrelated cross-host redirects. Allow only the ordinary apex-to-`www` form for the same registrable site, and cap that candidate at A.
+- Never perform broad discovery scans from the production VPS. Use a local machine or a separate non-production host for broad scanning. The production VPS may probe only the small shortlist.
+- Do not lower or weaken REALITY client-version constraints merely to make a client connect. If all targets fail similarly, diagnose core/version/fingerprint/config interoperability first.
+- Do not expose UUIDs, private keys, short IDs, passwords, panel credentials, tokens, or full secret-bearing configs.
 - Make production changes only when explicitly requested or authorized.
 
 ## Skip by default
 
-Do **not** perform these unless the user specifically asks or troubleshooting requires them:
+Do not perform these unless troubleshooting specifically requires them:
 
 - browser inspection;
-- website text/content-size scoring;
-- organization type scoring;
+- website content-size or organization-type scoring;
 - target traffic-volume estimation;
-- mandatory same-ASN or same-provider requirements;
-- certificate remaining-days thresholds beyond normal certificate validity;
 - fixed 100-point scoring;
-- mandatory multi-window or exhaustive discovery rounds;
+- mandatory same-ASN/provider requirements;
+- mandatory multi-window convergence;
 - large web-research sweeps after a clear winner exists.
 
 ## Inputs
 
-Infer what is already available. Only gather information that changes the result:
+Infer what is already available. Gather only facts that change the result:
 
-- VPS/region and actual address family;
-- server core and version: Xray, sing-box, panel-managed Xray, or other;
-- client core and version: mihomo, sing-box, Xray, etc.;
+- production REALITY listener port;
+- VPS region and production address family;
+- server core/version;
+- client core/version;
 - current target/SNI and whether it works;
+- client fingerprint;
 - candidate list or scanner output if available;
-- actual client fingerprint;
+- whether a real mainland-China client path is available for validation;
 - whether this is comparison-only or an authorized live change.
 
 ## Workflow
 
+### 0. Server posture gate
+
+Before selecting a new SNI:
+
+1. Confirm the production REALITY listener uses TCP/443.
+2. Record server core/version and client core/version.
+3. Confirm clocks are sane and the incumbent is known.
+4. If every candidate fails in the same way, stop SNI ranking and diagnose implementation interoperability.
+
+For Xray, do not automatically relax `minClientVer` or equivalent version checks to work around a client mismatch.
+
 ### 1. Build a small candidate pool
 
-Use the incumbent plus candidates from existing scan results, RealiTLScanner/RealityChecker, or focused discovery. Read [references/discovery.md](references/discovery.md) only when candidates must be discovered.
+Use the incumbent plus existing scan results or focused discovery. Read [references/discovery.md](references/discovery.md) only when candidates must be discovered.
 
-Keep roughly 5-12 plausible candidates for the cheap probe. Do not chase arbitrary category quotas.
+Keep about 5-12 plausible candidates for the cheap probe. Broad scans must run away from the production VPS.
 
-### 2. Run the target probe
+### 2. Run the target gate
 
-Use the bundled probe from the VPS or an equivalent test from the same network path:
+Use the bundled probe from the production VPS against only the shortlist:
 
 ```bash
-python3 scripts/probe_target.py <DOMAIN...>
+python3 scripts/probe_target.py --family ipv4 <DOMAIN...>
 ```
+
+Use the production address family.
 
 Record:
 
 - TLS 1.3;
-- ALPN `h2`;
-- normal certificate/SNI verification;
-- X25519 probe result;
+- ALPN h2;
+- certificate/SNI verification;
+- X25519;
 - remote IP;
-- CNAME chain and best-effort ASN/provider evidence;
-- CDN/shared-front-door classification;
-- one HTTP `HEAD` status and redirect target when available.
+- CNAME chain and ASN/provider evidence;
+- CDN/shared-front-door status;
+- redirect status;
+- high-risk target warning.
 
-Reject a candidate from the normal pool when TLS 1.3, `h2`, certificate/SNI verification, or X25519 compatibility clearly fails. Also reject any candidate confirmed as a CDN/shared platform front door. If directness is unknown, do not promote it to a finalist until verified.
+Reject a candidate if any hard gate fails. Keep at most 2-3 verified-direct finalists.
 
-Keep at most 2-4 **verified-direct** finalists.
+### 3. Test actual REALITY from the real client path
 
-### 3. Test actual REALITY interoperability
+For each finalist, test the actual server/client core pair and fingerprint from the real production client path. For the strict GFW-oriented grade, use a mainland-China network path.
 
-For each finalist, use an isolated temporary listener/client or another safe test with the **actual server and client core family** when practical.
-
-Record only:
+Make 5 fresh REALITY connection attempts when practical. Record only:
 
 ```text
 server_core/version
 client_core/version
 fingerprint
 candidate
-success/failure
+china_path_successes/attempts
 error class
 ```
 
-Interpretation rules:
+Rules:
 
-- If one target fails while another succeeds under the same core pair and fingerprint, treat the failure as target-specific evidence.
-- If all targets fail, check server/client version compatibility, REALITY client-version handling, key/short-id pairing, clock, fingerprint, and config mapping before changing the ranking.
-- A working real REALITY path overrides a contradictory generic scanner result.
+- No mainland-China path evidence means the candidate grade is capped at B.
+- 5/5 is required for S.
+- 4/5 can qualify for A if all other hard gates pass.
+- Repeated target-specific failures make the candidate C.
+- If every candidate fails similarly, classify it as implementation/environment failure instead of blaming the SNI.
 
-### 4. Benchmark TLS handshakes only
+### 4. Run the small TLS stability benchmark
 
-For finalists and the incumbent, avoid downloading pages. Measure fresh TCP + TLS handshakes:
+Benchmark only the incumbent and finalists:
 
 ```bash
 python3 scripts/benchmark_tls.py --rounds 8 --family ipv4 <INCUMBENT> <FINALIST...>
 ```
 
-Use the address family that production actually uses. Compare:
+Measure fresh TCP plus TLS handshakes only. Do not download pages.
+
+Compare:
 
 - success rate;
-- TCP p50/p95;
-- TLS-handshake p50/p95/max;
-- remote IP stability.
+- TCP p50 and worst;
+- TLS p50 and worst;
+- observed target IP set.
 
-Do not over-read tiny differences. Prefer p95/stability over a few milliseconds of p50.
+Do not calculate or report p95 from this small sample. Prefer reliability over tiny median differences.
 
-### 5. Rank with simple gates
+### 5. Assign S/A/B/C
 
-Use this order:
+Grade the tested profile, not the domain in isolation.
 
-1. CDN/front-door status is verified `direct`;
-2. recommended target profile passes;
-3. actual REALITY succeeds under the tested core pair;
-4. stable low TLS p95 and failure rate;
-5. fewer remaining risk flags;
-6. network proximity is a tie-breaker;
-7. keep the incumbent when candidates are effectively tied.
+#### S - Preferred Primary
 
-Hard rejection flags:
+Require all of the following:
 
-- `cdn/shared-front-door` — confirmed shared CDN/edge/platform front door;
-- `cdn-unknown` — not eligible for Primary until directness is verified.
+- production REALITY listener is TCP/443;
+- direct/non-CDN status is verified;
+- TLS 1.3, h2, certificate verification, and X25519 all pass;
+- no high-risk target warning;
+- no redirect;
+- actual mainland-China REALITY path succeeds 5/5 with the real core pair/fingerprint;
+- TLS stability benchmark succeeds 100%;
+- no material implementation or network risk remains.
 
-Other risk flags:
+S should be rare.
 
-- `redirect` — especially an unrelated cross-host redirect;
-- `famous/sensitive-target` — blocking/fingerprinting policy risk;
-- `far-network` — weaker camouflage/latency fit;
-- `wildcard-cert` — less specific identity, but not invalid when verification passes;
-- `implementation-interop` — result depends on a particular core/version combination.
+#### A - Production acceptable
+
+Require all hard gates to pass and real mainland-China path evidence. Use A when the profile is production-suitable but has a minor imperfection, such as:
+
+- China path succeeds 4/5 rather than 5/5;
+- wildcard certificate with valid normal hostname verification;
+- allowed apex-to-`www` redirect;
+- slightly worse but still stable latency/network fit.
+
+A may be Primary when no S candidate exists.
+
+#### B - Backup or incomplete evidence
+
+Use B when the target gate passes but production confidence is incomplete, for example:
+
+- no real mainland-China path test yet;
+- actual REALITY interoperability not yet verified;
+- directness or implementation evidence needs one more manual confirmation;
+- stability is acceptable but materially weaker than the incumbent.
+
+B is Backup only, never Primary in strict mode.
+
+#### C - Reject for this deployment
+
+Use C for any hard rejection or current-environment incompatibility, including:
+
+- confirmed CDN/shared front door;
+- CDN/front-door status unknown after reasonable checks;
+- non-443 production REALITY listener;
+- TLS 1.3/h2/certificate/X25519 failure;
+- Xray high-risk target warning pattern;
+- unrelated cross-host redirect;
+- repeated target-specific REALITY failures;
+- unresolved server/client incompatibility that prevents production use.
+
+When C is caused by implementation incompatibility, state that it is not evidence that the SNI itself is intrinsically bad.
 
 ### 6. Roll out only when authorized
 
-Read [references/live-rollout.md](references/live-rollout.md) only for a live change.
+Read [references/live-rollout.md](references/live-rollout.md) only for an authorized live change.
 
 ## Fixed comparison table
 
-Whenever comparing two or more domains, always use this exact column order:
+Whenever comparing two or more candidates, always use this exact column order:
 
-| Rank | Domain | CDN/front door | TLS profile | REALITY | TCP/TLS p50-p95 | Target IP / network | Risk flags | Pros | Cons | Verdict |
-|---:|---|---|---|---|---|---|---|---|---|---|
+| Rank | Grade | Domain | CDN/shared | TLS profile | REALITY / CN path | TLS stability | Target IP / network | Pros | Cons | Verdict |
+|---:|:---:|---|---|---|---|---|---|---|---|---|
 
 Formatting rules:
 
-- `CDN/front door`: use only `direct ✅`, `<provider> ❌`, or `unknown ⚠️`. A row with `❌` or `unknown ⚠️` cannot be Primary.
-- `TLS profile`: compact form such as `1.3 ✅ · h2 ✅ · X25519 ✅ · cert ✅`.
-- `REALITY`: state the tested core pair, e.g. `Xray→mihomo ✅`, or `not tested`.
-- `TCP/TLS p50-p95`: show both when measured, e.g. `TCP 18/24 ms · TLS 31/42 ms`.
-- `Target IP / network`: show the observed IP and only verified ASN/region/proximity facts.
-- `Risk flags`: use `none` or short comma-separated flags.
-- `Pros` and `Cons`: each should be concise and evidence-based.
-- `Verdict`: use only `Primary`, `Backup`, or `Reject`.
+- `Grade`: only `S`, `A`, `B`, or `C`.
+- `CDN/shared`: only `direct`, `<provider> REJECT`, or `unknown`.
+- `TLS profile`: compact form such as `1.3 ok / h2 ok / X25519 ok / cert ok`.
+- `REALITY / CN path`: include tested core pair and result, e.g. `Xray->mihomo / CN 5/5`.
+- `TLS stability`: `success rate / TLS p50 / worst`, e.g. `100% / 31 ms / 45 ms`.
+- `Target IP / network`: show observed IPs and only verified network/proximity facts.
+- `Pros` and `Cons`: concise, evidence-based.
+- `Verdict`: only `Primary`, `Backup`, or `Reject`.
 
-Before the table, print only:
+Before the table print only:
 
 ```text
-Primary: <DOMAIN>
+Primary: <DOMAIN> (<GRADE>)
 Reason: <one concise sentence>
 ```
 
-After the table, if configuration mapping is relevant, print only the exact safe mapping:
+If no S/A candidate exists, print:
+
+```text
+Primary: none
+Reason: no candidate has enough verified production evidence.
+```
+
+After the table, if config mapping is relevant, print only:
 
 ```text
 target/dest/handshake.server: <DOMAIN>:443
@@ -190,7 +245,7 @@ serverName/SNI: <DOMAIN>
 Production: verified | not tested | rollback required
 ```
 
-Do not bury the comparison in a long narrative unless the user asks for analysis.
+Do not bury the result in a long narrative unless the user asks for analysis.
 
 ## Stack notes
 
@@ -204,7 +259,7 @@ serverNames: <DOMAIN>
 client serverName/SNI: <DOMAIN>
 ```
 
-Inspect the installed Xray version and REALITY version constraints before diagnosing SNI failures. Do not assume non-Xray clients encode REALITY client-version fields identically.
+Inspect the installed Xray version and REALITY version constraints before diagnosing SNI failures. Do not assume other clients encode REALITY client-version fields identically. Do not automatically reduce the server's client-version floor as a compatibility workaround.
 
 ### sing-box
 
@@ -220,4 +275,4 @@ Client uses the same intended `tls.server_name` plus the configured REALITY key/
 
 ### mihomo / ShellCrash
 
-Treat mihomo as the REALITY **client implementation** in the profile. Verify its version and client fingerprint. If authentication fails against every target, investigate server/client interoperability before reselecting SNI.
+Treat mihomo as part of the tested REALITY profile. Verify its version and fingerprint. If authentication fails against every candidate, investigate server/client interoperability before reselecting SNI.

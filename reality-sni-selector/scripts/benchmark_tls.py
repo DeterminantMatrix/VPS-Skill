@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Rotating TCP/TLS-only benchmark for REALITY target finalists."""
+"""Small rotating TCP/TLS stability benchmark for REALITY target finalists."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import socket
 import ssl
 import statistics
@@ -13,25 +12,28 @@ import time
 from datetime import datetime, timezone
 
 
-def percentile(values: list[float], fraction: float) -> float:
-    if not values:
-        raise ValueError("empty values")
-    ordered = sorted(values)
-    index = max(0, math.ceil(len(ordered) * fraction) - 1)
-    return ordered[index]
+def family_value(name: str) -> socket.AddressFamily:
+    return socket.AF_INET if name == "ipv4" else socket.AF_INET6
 
 
-def resolve(domain: str, port: int, family_name: str) -> tuple[int, tuple, str]:
-    family = socket.AF_INET if family_name == "ipv4" else socket.AF_INET6
-    infos = socket.getaddrinfo(domain, port, family=family, type=socket.SOCK_STREAM)
-    if not infos:
+def resolve_all(domain: str, port: int, family_name: str) -> list[tuple[int, int, int, tuple, str]]:
+    infos = socket.getaddrinfo(domain, port, family=family_value(family_name), type=socket.SOCK_STREAM)
+    unique: list[tuple[int, int, int, tuple, str]] = []
+    seen: set[str] = set()
+    for af, socktype, proto, _, sockaddr in infos:
+        ip = sockaddr[0]
+        if ip in seen:
+            continue
+        seen.add(ip)
+        unique.append((af, socktype, proto, sockaddr, ip))
+    if not unique:
         raise OSError("no address returned")
-    af, socktype, proto, _, sockaddr = infos[0]
-    return af, sockaddr, sockaddr[0]
+    return unique
 
 
-def handshake(domain: str, af: int, sockaddr: tuple, timeout: float) -> dict[str, object]:
-    raw = socket.socket(af, socket.SOCK_STREAM)
+def handshake(domain: str, target: tuple[int, int, int, tuple, str], timeout: float) -> dict[str, object]:
+    af, socktype, proto, sockaddr, ip = target
+    raw = socket.socket(af, socktype, proto)
     raw.settimeout(timeout)
     try:
         tcp_started = time.perf_counter()
@@ -50,20 +52,19 @@ def handshake(domain: str, af: int, sockaddr: tuple, timeout: float) -> dict[str
                 raise ssl.SSLError(f"unexpected profile: {version}, ALPN={alpn}")
             return {
                 "ok": True,
+                "remote_ip": ip,
                 "tcp_ms": round(tcp_ms, 3),
                 "tls_ms": round(tls_ms, 3),
-                "tls_version": version,
-                "alpn": alpn,
             }
     except Exception as exc:
         try:
             raw.close()
         except OSError:
             pass
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:500]}
+        return {"ok": False, "remote_ip": ip, "error": f"{type(exc).__name__}: {exc}"[:500]}
 
 
-def summarize(rows: list[dict[str, object]], remote_ip: str) -> dict[str, object]:
+def summarize(rows: list[dict[str, object]]) -> dict[str, object]:
     good = [row for row in rows if row.get("ok") is True]
     tcp = [float(row["tcp_ms"]) for row in good]
     tls = [float(row["tls_ms"]) for row in good]
@@ -71,15 +72,14 @@ def summarize(rows: list[dict[str, object]], remote_ip: str) -> dict[str, object
         "attempts": len(rows),
         "successes": len(good),
         "success_rate": round(len(good) / len(rows), 4) if rows else 0.0,
-        "remote_ip": remote_ip,
+        "remote_ips": sorted({str(row.get("remote_ip") or "") for row in rows if row.get("remote_ip")}),
     }
     if good:
         result.update({
             "tcp_p50_ms": round(statistics.median(tcp), 3),
-            "tcp_p95_ms": round(percentile(tcp, 0.95), 3),
+            "tcp_worst_ms": round(max(tcp), 3),
             "tls_p50_ms": round(statistics.median(tls), 3),
-            "tls_p95_ms": round(percentile(tls, 0.95), 3),
-            "tls_max_ms": round(max(tls), 3),
+            "tls_worst_ms": round(max(tls), 3),
         })
     errors = [str(row.get("error")) for row in rows if row.get("ok") is not True]
     if errors:
@@ -96,8 +96,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=443)
     parser.add_argument("--family", choices=("ipv4", "ipv6"), default="ipv4")
     args = parser.parse_args()
-    if not 2 <= args.rounds <= 30:
-        parser.error("rounds must be 2..30")
+    if not 3 <= args.rounds <= 30:
+        parser.error("rounds must be 3..30")
     if not 0 <= args.pace <= 5:
         parser.error("pace must be 0..5 seconds")
 
@@ -105,11 +105,11 @@ def main() -> int:
     if len(domains) < 2:
         parser.error("provide at least two unique domains")
 
-    resolved: dict[str, tuple[int, tuple, str] | None] = {}
+    resolved: dict[str, list[tuple[int, int, int, tuple, str]] | None] = {}
     resolve_errors: dict[str, str] = {}
     for domain in domains:
         try:
-            resolved[domain] = resolve(domain, args.port, args.family)
+            resolved[domain] = resolve_all(domain, args.port, args.family)
         except Exception as exc:
             resolved[domain] = None
             resolve_errors[domain] = f"{type(exc).__name__}: {exc}"[:500]
@@ -118,23 +118,18 @@ def main() -> int:
     for round_no in range(args.rounds):
         for step in range(len(domains)):
             domain = domains[(round_no + step) % len(domains)]
-            target = resolved[domain]
-            if target is None:
-                rows[domain].append({"ok": False, "error": resolve_errors[domain]})
+            targets = resolved[domain]
+            if not targets:
+                row = {"ok": False, "remote_ip": "", "error": resolve_errors[domain]}
             else:
-                af, sockaddr, _ = target
-                row = handshake(domain, af, sockaddr, args.timeout)
-                row["round"] = round_no + 1
-                rows[domain].append(row)
+                target = targets[round_no % len(targets)]
+                row = handshake(domain, target, args.timeout)
+            row["round"] = round_no + 1
+            rows[domain].append(row)
             if args.pace:
                 time.sleep(args.pace)
 
-    summary: dict[str, object] = {}
-    for domain in domains:
-        target = resolved[domain]
-        remote_ip = target[2] if target else ""
-        summary[domain] = summarize(rows[domain], remote_ip)
-
+    summary = {domain: summarize(rows[domain]) for domain in domains}
     print(json.dumps({
         "observed_at_utc": datetime.now(timezone.utc).isoformat(),
         "protocol": {
@@ -142,6 +137,7 @@ def main() -> int:
             "family": args.family,
             "rounds": args.rounds,
             "pace_seconds": args.pace,
+            "statistics": "success rate, median, worst; no p95 from small sample",
         },
         "summary": summary,
     }, ensure_ascii=False, indent=2))

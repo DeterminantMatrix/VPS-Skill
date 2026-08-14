@@ -1,4 +1,4 @@
 interface:
-  display_name: "优选 SNI"
-  short_description: "严格排除 CDN/共享前门，用最少检查比较 REALITY target/SNI。"
-  default_prompt: "Use $reality-sni-selector to compare REALITY target/SNI candidates with a minimal workflow, test actual interoperability when possible, and return the fixed comparison table."
+  display_name: "REALITY SNI Selector"
+  short_description: "Strict non-CDN REALITY SNI selection with S/A/B/C grading."
+  default_prompt: "Use $reality-sni-selector to compare REALITY target/SNI candidates with strict no-CDN and GFW-risk gates, validate the real client path when possible, and return the fixed S/A/B/C comparison table."
