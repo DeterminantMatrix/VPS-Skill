@@ -1,4 +1,4 @@
 interface:
-  display_name: "优选SNI"
-  short_description: "为 VPS 优选并安全上线真实、稳定、可复测的 REALITY SNI。"
-  default_prompt: "Use $reality-sni-selector to discover, score, fairly compare, and safely roll out a production-suitable REALITY SNI for my VPS."
+  display_name: "REALITY SNI Selector"
+  short_description: "Strict non-CDN REALITY SNI selection with S/A/B/C grading and same-ASN/institution preferences."
+  default_prompt: "Use $reality-sni-selector to compare REALITY target/SNI candidates with strict no-CDN and GFW-risk gates, validate the real client path when possible, and rank same-grade candidates by same-ASN and preferred-institution fit, and return the fixed S/A/B/C comparison table."

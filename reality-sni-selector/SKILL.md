@@ -1,276 +1,306 @@
 ---
 name: reality-sni-selector
-description: Choose, compare, validate, grade, and safely roll out TLS SNI/target domains for VPS nodes using Xray REALITY, VLESS Reality, sing-box Reality, 3x-ui/x-ui, or raw Xray. Use when Codex needs to discover or replace serverName/dest/handshake.server candidates, interpret RealiTLScanner or RealityChecker, reject parked or implausibly small targets, inspect certificates/CDN/ASN/latency and website traffic plausibility, run paced incumbent-versus-challenger tests, judge convergence, verify real user paths, or perform reversible SNI changes.
+description: Compare, validate, grade, and optionally roll out REALITY target/SNI profiles for VPS nodes using Xray, sing-box, mihomo, x-ui/3x-ui, or ShellCrash. Use when selecting or replacing REALITY serverName/target/dest/handshake.server, comparing candidate domains, checking REALITY compatibility, investigating target-specific handshake failures, or reducing known GFW-blocking risks for a production REALITY node.
 ---
 
-# 优选 SNI
+# REALITY SNI Selector
 
 ## Goal
 
-Select a practical REALITY target for one VPS and keep these conclusions separate:
+Choose a stable REALITY target/SNI for the user's actual server, client, and network path while minimizing known deployment risks. Keep the workflow short and fail fast.
 
-- **Compatibility**: TLS/X25519 and ordinary HTTPS work.
-- **Production qualification**: every A-grade hard gate passes on the real path.
-- **Search convergence**: mandatory coverage and fair multi-window comparison show that further searching has low expected value.
-- **Durability**: a later window, at least six hours after qualification, still passes.
+A grade estimates production suitability for the tested profile. It does not guarantee that a VPS will never be detected or blocked.
 
-Never translate one conclusion into another. An A grade is not proof of optimality, convergence, or long-term stability.
+Treat each candidate as a profile:
 
-## Non-negotiable rules
+```text
+(target host:port, SNI, server core/version, client core/version, fingerprint, address family, client network path)
+```
 
-- Work from the actual VPS, stack, incumbent SNI, and user path.
-- Keep exact hostnames. Do not add or remove `www`.
-- Pair server `dest`/`handshake.server` with server and client `serverName`.
-- Use a staged fail-fast pipeline: cheap DNS/TLS/front-door gates first, browser and 5-sample HTTPS second, 20-round tournament only for finalists, and real REALITY testing last.
-- When the request says no CDN, use `selection_mode: strict_no_cdn`: a known CDN, platform front door, or shared CDN CNAME cannot be a Primary candidate. Do not spend browser or benchmark budget on it.
-- For a Primary candidate, explicitly verify TLS 1.3 and ALPN `h2`; `compatibility_pass: true` alone is insufficient evidence.
-- Prefer a stable exact-SAN website operated by a university, library, museum, research institute, research center, think tank, nonprofit, or public organization; prefer the same ASN when the organization and website gates also pass. This is a tie-breaker, not a substitute for protocol or certificate gates.
-- Treat RealityChecker as a first-pass filter, not final proof.
-- Keep the incumbent in every serious comparison.
-- Treat the target website as an operational dependency. REALITY can create target-side TLS handshakes and forward invalid connections; proxy payload volume is not the same as target traffic.
-- Reject parked, blank, default, abandoned, for-sale, maintenance-only, and one-logo holding pages as primaries even when latency is excellent.
-- Treat static technology as neutral. Judge meaningful content, ongoing operation, and plausible traffic scale.
-- Filter weak sites before high-sample tests. Pace requests, never parallel-flood one target, and stop on `429`, `Retry-After`, repeated `403/5xx`, resets, or distress signals.
-- Scan only the VPS `/24` or another explicitly authorized range.
-- Make live changes only when the user explicitly requests or authorizes them.
-- Never expose UUIDs, private keys, short IDs, proxy passwords, panel credentials, tokens, or complete secret-bearing configs.
+## Hard rules
+
+- Keep the working incumbent as the control.
+- Preserve exact hostnames. Do not silently add or remove `www`.
+- Keep server target/dest/handshake.server and allowed/client serverName consistent unless the implementation intentionally separates them.
+- Require TLS 1.3, ALPN h2, normal certificate/SNI verification, and X25519 compatibility.
+- Confirm the target is direct/non-CDN before it can become a finalist.
+- Reject confirmed shared CDN or platform front doors, including Cloudflare, CloudFront/AWS shared fronts, Akamai, Fastly, Azure Front Door/CDN, and comparable shared edge services.
+- Treat unknown CDN/front-door status as unverified. It cannot be Primary or receive S/A.
+- In strict GFW-risk mode, require the production REALITY listener to use TCP/443 before any candidate can receive S/A/B. A non-443 production listener makes the current deployment grade C until corrected.
+- Reject targets explicitly matching current Xray high-risk warning patterns: `.cn`, `.ru`, `.ir`, or hostnames containing `apple`, `icloud`, or `microsoft`.
+- Reject unrelated cross-host redirects. Allow only the ordinary apex-to-`www` form for the same registrable site, and cap that candidate at A.
+- Never perform broad discovery scans from the production VPS. Use a local machine or a separate non-production host for broad scanning. The production VPS may probe only the small shortlist.
+- Do not lower or weaken REALITY client-version constraints merely to make a client connect. If all targets fail similarly, diagnose core/version/fingerprint/config interoperability first.
+- Do not expose UUIDs, private keys, short IDs, passwords, panel credentials, tokens, or full secret-bearing configs.
+- Make production changes only when explicitly requested or authorized.
+
+## Skip by default
+
+Do not perform these unless troubleshooting specifically requires them:
+
+- browser inspection;
+- website content-size or organization-type scoring;
+- target traffic-volume estimation;
+- fixed 100-point scoring;
+- mandatory same-ASN/provider requirements (same ASN is a preference, never a hard gate);
+- mandatory multi-window convergence;
+- large web-research sweeps after a clear winner exists.
 
 ## Inputs
 
-Collect or infer:
+Infer what is already available. Gather only facts that change the result:
 
-- VPS alias/IP, provider, ASN, region, OS/architecture, and SSH method.
-- Stack: sing-box, Xray, x-ui/3x-ui, or unknown.
-- Incumbent SNI and whether it currently works.
-- Existing scan results or candidate lists.
-- Actual path: client/router, relay, landing/exit, policy groups, tunnels, and dependent configs.
-- Requested scope: quick selection, serious reselection, isolated test, or live rollout.
-- Selection mode: `balanced`, `strict_no_cdn`, or `production`; default to `strict_no_cdn` when the user asks for a non-CDN target.
-- Organization preference: same-ASN preferred institution first, then same-ASN other organization, then same-region preferred institution, then other suitable direct sites.
-
-Ask only for information that blocks safe progress. Prefer known inventory aliases and key paths; never ask the user to paste secrets already available locally.
+- production REALITY listener port;
+- VPS region, production address family, and VPS public ASN (or public IP so the ASN can be resolved);
+- server core/version;
+- client core/version;
+- current target/SNI and whether it works;
+- client fingerprint;
+- candidate list or scanner output if available;
+- whether a real mainland-China client path is available for validation;
+- whether this is comparison-only or an authorized live change.
 
 ## Workflow
 
-### 1. Inspect the incumbent and path
+### 0. Server posture gate
 
-Read current server and client SNI fields, service/listener state, selected policy groups, and dependency locations. Record only safe fields. Use the incumbent as the control.
+Before selecting a new SNI:
 
-### 2. Discover a closed candidate pool
+1. Confirm the production REALITY listener uses TCP/443.
+2. Record server core/version and client core/version.
+3. Confirm clocks are sane and the incumbent is known.
+4. Record the VPS ASN when available; use it only as a post-gate ranking preference.
+5. If every candidate fails in the same way, stop SNI ranking and diagnose implementation interoperability.
 
-For serious selection or a request to find something better, read [references/discovery.md](references/discovery.md). Complete the authorized `/24`, same-provider evidence, regional organizations, universities/research, B2B/service providers, and community/institutional categories. Do not stop at the first attractive candidate.
+For Xray, do not automatically relax `minClientVer` or equivalent version checks to work around a client mismatch.
 
-Clean scan artifacts with:
+### 1. Build a small candidate pool
 
-```powershell
-python "<SKILL_DIR>\scripts\clean_reality_candidates.py" "<INPUT>" --out "<OUTPUT>" --strict --show-rejects
-```
+Use the incumbent plus existing scan results or focused discovery. Read [references/discovery.md](references/discovery.md) only when candidates must be discovered.
 
-Before any browser or high-sample test, apply the cheap gate in this order:
+Keep about 5-12 plausible candidates for the cheap probe. Broad scans must run away from the production VPS.
 
-1. exact SAN and certificate validity;
-2. TLS 1.3 and ALPN `h2`;
-3. DNS/CNAME/front-door/CDN evidence;
-4. distress status, WAF, redirect count, and final-host relationship;
-5. stable A/AAAA and rough ASN/region fit.
+### 2. Run the target gate
 
-Drop candidates that fail a hard gate. Keep no more than 3–5 candidates per node for the browser pass, and no more than 2–3 challengers for the first 20-round tournament.
-
-### 3. Run compatibility filtering
-
-Use RealityChecker or manual TLS checks from the VPS to reduce the pool. Preserve the requested hostname, certificate hostname, redirect destination, and checker-reported final domain as distinct values.
-
-Scanner success is only compatibility evidence. A working real REALITY path overrides a conflicting scanner result.
-
-For every finalist, record `tls_version`, `alpn`, `certificate_identity`, `redirect_count`, `final_host_relation`, and `front_door`. A missing TLS version or ALPN result prevents a candidate from being Primary.
-
-### 4. Apply certificate, network, website, organization, and traffic gates
-
-For every serious finalist, read [references/site-traffic-gate.md](references/site-traffic-gate.md).
-
-- Inspect the exact SAN list and require an explicit exact hostname for A.
-- Resolve current addresses and document ASN, region, hosting, CDN/Anycast, and mismatches.
-- Classify the organization: `preferred-institution`, `same-asn-preferred-institution`, `same-asn-other`, `commercial`, or `unknown`. Prefer universities, libraries, museums, research institutes/centers, think tanks, nonprofits, charities, and public organizations; never let this preference override a hard protocol, certificate, WAF, or front-door failure.
-- Open the exact hostname in a real browser once and inspect rendered content.
-- Estimate current REALITY connection activity when a production node exists.
-- Reject or downgrade candidates whose site scale cannot plausibly absorb the expected handshake pattern.
-
-Use the deterministic first-pass helpers:
+Use the bundled probe from the production VPS against only the shortlist:
 
 ```bash
-python "<SKILL_DIR>/scripts/inspect_site_footprint.py" <DOMAIN...>
-python "<SKILL_DIR>/scripts/inspect_tls_profile.py" <DOMAIN...>
-python3 "<SKILL_DIR>/scripts/observe_connection_rate.py" --port 443 --seconds 20
+python3 scripts/probe_target.py --family ipv4 <DOMAIN...>
 ```
 
-The footprint script does not replace browser inspection.
+Use the production address family. Resolve the VPS public ASN once from a trusted source or the VPS public IP, then compare it with the per-address ASN evidence reported by the probe.
 
-### 5. Predeclare finalists and run a fair tournament
+Record:
 
-Read [references/benchmark-convergence.md](references/benchmark-convergence.md). Fix the incumbent, two to three challengers after the strict cheap gate, address family, redirect policy, request count, pacing, endpoints, timeouts, and rejection thresholds before testing.
+- TLS 1.3;
+- ALPN h2;
+- certificate/SNI verification;
+- X25519;
+- remote IP;
+- CNAME chain and ASN/provider evidence;
+- whether the observed target ASN(s) match the VPS ASN;
+- CDN/shared-front-door status;
+- redirect status;
+- high-risk target warning.
 
-Run the on-box benchmark from the target VPS:
+Reject a candidate if any hard gate fails. Keep at most 2-3 verified-direct finalists.
+
+### 3. Test actual REALITY from the real client path
+
+For each finalist, test the actual server/client core pair and fingerprint from the real production client path. For the strict GFW-oriented grade, use a mainland-China network path.
+
+Make 5 fresh REALITY connection attempts when practical. Record only:
+
+```text
+server_core/version
+client_core/version
+fingerprint
+candidate
+china_path_successes/attempts
+error class
+```
+
+Rules:
+
+- No mainland-China path evidence means the candidate grade is capped at B.
+- 5/5 is required for S.
+- 4/5 can qualify for A if all other hard gates pass.
+- Repeated target-specific failures make the candidate C.
+- If every candidate fails similarly, classify it as implementation/environment failure instead of blaming the SNI.
+
+### 4. Run the small TLS stability benchmark
+
+Benchmark only the incumbent and finalists:
 
 ```bash
-python3 benchmark_https.py --rounds 20 --pace 0.5 <INCUMBENT> <CHALLENGER...>
+python3 scripts/benchmark_tls.py --rounds 8 --family ipv4 <INCUMBENT> <FINALIST...>
 ```
 
-Do not add a preference after seeing results. Rerun the same pool if the finalists change materially.
+Measure fresh TCP plus TLS handshakes only. Do not download pages.
 
-To save request and token budget, use the first window to rank the fixed pool, then use a second comparable window only for the incumbent, winner, and runner-up. Do not claim convergence unless the required windows and expansion coverage are complete.
+Compare:
 
-### 6. Grade with fixed evidence
+- success rate;
+- TCP p50 and worst;
+- TLS p50 and worst;
+- observed target IP set.
 
-Create one JSON evidence object per finalist and run:
+Do not calculate or report p95 from this small sample. Prefer reliability over tiny median differences.
 
-```bash
-python "<SKILL_DIR>\scripts\score_candidate.py" evidence.json
+### 5. Assign S/A/B/C
+
+Grade the tested profile, not the domain in isolation.
+
+#### S - Preferred Primary
+
+Require all of the following:
+
+- production REALITY listener is TCP/443;
+- direct/non-CDN status is verified;
+- TLS 1.3, h2, certificate verification, and X25519 all pass;
+- no high-risk target warning;
+- no redirect;
+- actual mainland-China REALITY path succeeds 5/5 with the real core pair/fingerprint;
+- TLS stability benchmark succeeds 100%;
+- no material implementation or network risk remains.
+
+S should be rare.
+
+#### A - Production acceptable
+
+Require all hard gates to pass and real mainland-China path evidence. Use A when the profile is production-suitable but has a minor imperfection, such as:
+
+- China path succeeds 4/5 rather than 5/5;
+- wildcard certificate with valid normal hostname verification;
+- allowed apex-to-`www` redirect;
+- slightly worse but still stable latency/network fit.
+
+A may be Primary when no S candidate exists.
+
+#### B - Backup or incomplete evidence
+
+Use B when the target gate passes but production confidence is incomplete, for example:
+
+- no real mainland-China path test yet;
+- actual REALITY interoperability not yet verified;
+- directness or implementation evidence needs one more manual confirmation;
+- stability is acceptable but materially weaker than the incumbent.
+
+B is Backup only, never Primary in strict mode.
+
+#### C - Reject for this deployment
+
+Use C for any hard rejection or current-environment incompatibility, including:
+
+- confirmed CDN/shared front door;
+- CDN/front-door status unknown after reasonable checks;
+- non-443 production REALITY listener;
+- TLS 1.3/h2/certificate/X25519 failure;
+- Xray high-risk target warning pattern;
+- unrelated cross-host redirect;
+- repeated target-specific REALITY failures;
+- unresolved server/client incompatibility that prevents production use.
+
+When C is caused by implementation incompatibility, state that it is not evidence that the SNI itself is intrinsically bad.
+
+### 6. Apply preference fit within the same grade
+
+After assigning S/A/B/C, calculate a simple **Preference fit** score only for ordering candidates inside the same grade:
+
+- `+2 same-ASN` — all observed target IPs with known ASN are in the same ASN as the VPS;
+- `+1 preferred-institution` — the hostname belongs to a verified university, research institute, library, museum, nonprofit, NGO, public research body, or public cultural institution;
+- `0` otherwise.
+
+Rules:
+
+- Preference fit never changes S/A/B/C.
+- Preference fit never rescues a CDN/shared-front-door or other C candidate.
+- Same ASN is stronger than institution type because it directly improves network-topology plausibility, but it remains only a tie-breaker.
+- Do not infer institution type from `.edu`, `.org`, or a brand-like name alone. Use verified organization identity.
+- If candidates have the same grade and Preference fit, prefer higher REALITY success, then lower TLS worst-case latency, then the working incumbent.
+
+Examples:
+
+```text
+3/3 = same ASN + preferred institution
+2/3 = same ASN only
+1/3 = preferred institution only
+0/3 = neither
 ```
 
-The script enforces fixed weights and hard gates. Do not manually promote a candidate above its computed hard-gate ceiling. Add human explanations for each input; never submit unsupported guesses as evidence.
+### 7. Roll out only when authorized
 
-### 7. Test REALITY
+Read [references/live-rollout.md](references/live-rollout.md) only for an authorized live change.
 
-Test in this order:
+## Fixed comparison table
 
-1. Direct target TLS/HTTPS from the VPS.
-2. Isolated temporary REALITY listener and client.
-3. Actual client/router path to at least two independent external endpoints.
-4. Five consecutive successes through the real selected policy path.
+Whenever comparing two or more candidates, always use this exact column order:
 
-Selection-only work normally stops at B. A requires the synchronized production path, active services, and rollback evidence.
+| Rank | Grade | Domain | CDN/shared | TLS profile | REALITY / CN path | TLS stability | Target IP / network | Preference fit | Pros | Cons | Verdict |
+|---:|:---:|---|---|---|---|---|---|---|---|---|---|
 
-### 8. Roll out only when authorized
+Formatting rules:
 
-For a live change, read [references/live-rollout.md](references/live-rollout.md). Back up all affected server and client configs, validate staged configs before applying, update paired fields as one coordinated change, preserve policy selections, verify listeners/logs, and roll back every affected node if any hard gate fails.
+- `Grade`: only `S`, `A`, `B`, or `C`.
+- `CDN/shared`: only `direct`, `<provider> REJECT`, or `unknown`.
+- `TLS profile`: compact form such as `1.3 ok / h2 ok / X25519 ok / cert ok`.
+- `REALITY / CN path`: include tested core pair and result, e.g. `Xray->mihomo / CN 5/5`.
+- `TLS stability`: `success rate / TLS p50 / worst`, e.g. `100% / 31 ms / 45 ms`.
+- `Target IP / network`: show observed IPs, target ASN, VPS ASN, and whether the ASN matches when verified.
+- `Preference fit`: show `0/3` to `3/3` plus short evidence, e.g. `3/3 same-ASN + university`.
+- `Pros` and `Cons`: concise, evidence-based.
+- `Verdict`: only `Primary`, `Backup`, or `Reject`.
 
-## Grades
+Before the table print only:
 
-- **A — production-qualified**: exact certificate, acceptable network/site/traffic evidence, stable HTTPS, real path to two endpoints, five consecutive successes, synchronized dependencies, active services, and rollback all pass.
-- **B — validated candidate**: manual gates pass, but production synchronization or actual user-path evidence is incomplete.
-- **C — compatibility backup**: connects but has a documented compromise such as wildcard/shared identity, placeholder or implausible site footprint, region/front-door mismatch, or unstable behavior.
-- **D — rejected**: certificate, TLS, HTTP, reachability, or real proxy path fails.
-
-Report evidence maturity separately:
-
-- `single-window`
-- `cross-window` for two comparable windows at least 30 minutes apart
-- `durable` only after another successful window at least six hours later
-
-## Stop conditions
-
-Mark search convergence only when:
-
-1. At least one A-grade candidate exists.
-2. Mandatory discovery coverage is complete.
-3. The incumbent and finalists completed identical head-to-head tests.
-4. Two timing windows agree on the winner or show no material difference.
-5. Two consecutive expansion rounds found no materially better challenger.
-6. The winner passed the website and target-traffic plausibility gate.
-
-Otherwise report `not assessed` or `provisional`. If exhaustive discovery produces no A, preserve the incumbent and report the failed gates without lowering the standard.
-
-## Selection policy
-
-### Hard gates before expensive work
-
-Do not open a browser or run a 20-round benchmark for a candidate that lacks any of the following:
-
-- explicit exact SAN for the requested hostname;
-- currently valid certificate;
-- TLS 1.3 and ALPN `h2` evidence;
-- no known CDN/shared platform front door when `selection_mode: strict_no_cdn`;
-- no repeated `403`, `429`, `5xx`, resets, or WAF challenge;
-- no unrelated or multi-hop redirect;
-- stable DNS/IP evidence.
-
-### Organization preference
-
-Use organization and ASN as a preference after hard gates:
-
-1. same-ASN preferred institution;
-2. same-region preferred institution;
-3. same-ASN other suitable organization;
-4. same-region direct suitable organization;
-5. other direct candidates.
-
-Preferred institutions include universities, libraries, museums, research institutes, research centers, think tanks, nonprofits, charities, and public organizations. The preference is a tie-breaker only; an institution with a bad certificate, CDN front door, unstable TLS, WAF, placeholder page, or implausible traffic remains rejected.
-
-### Cost-control rule
-
-Be strict about identity, TLS, ALPN, front-door risk, and distress signals. Use graded evidence for latency, site size, ordinary hosting technology, and a single same-organization redirect. This avoids false negatives while reserving browser, benchmark, and REALITY-path resources for candidates that can actually qualify.
-
-## Stack mappings
-
-### sing-box
-
-Server:
-
-```json
-"tls": {
-  "enabled": true,
-  "server_name": "<DOMAIN>",
-  "reality": {
-    "enabled": true,
-    "handshake": {"server": "<DOMAIN>", "server_port": 443},
-    "private_key": "<PRIVATE_KEY>",
-    "short_id": ["<SHORT_ID>"]
-  }
-}
+```text
+Primary: <DOMAIN> (<GRADE>)
+Reason: <one concise sentence>
 ```
 
-Client:
+If no S/A candidate exists, print:
 
-```json
-"tls": {
-  "enabled": true,
-  "server_name": "<DOMAIN>",
-  "utls": {"enabled": true, "fingerprint": "chrome"},
-  "reality": {"enabled": true, "public_key": "<PUBLIC_KEY>", "short_id": "<SHORT_ID>"}
-}
+```text
+Primary: none
+Reason: no candidate has enough verified production evidence.
 ```
+
+After the table, if config mapping is relevant, print only:
+
+```text
+target/dest/handshake.server: <DOMAIN>:443
+serverName/SNI: <DOMAIN>
+Production: verified | not tested | rollback required
+```
+
+Do not bury the result in a long narrative unless the user asks for analysis.
+
+## Stack notes
 
 ### Xray / x-ui / 3x-ui
 
+Typical paired fields:
+
 ```text
-dest: <DOMAIN>:443
+target/dest: <DOMAIN>:443
 serverNames: <DOMAIN>
-client sni/serverName: <DOMAIN>
+client serverName/SNI: <DOMAIN>
 ```
 
-Do not confuse the REALITY public key with an SSH key or the target website certificate key.
+Inspect the installed Xray version and REALITY version constraints before diagnosing SNI failures. Do not assume other clients encode REALITY client-version fields identically. Do not automatically reduce the server's client-version floor as a compatibility workaround.
 
-## Output contract
+### sing-box
 
-Lead with:
+Server conceptually pairs:
 
 ```text
-Primary: <DOMAIN>
-Grade: A | B | C | D
-dest/handshake.server: <DOMAIN>:443
-serverName: <DOMAIN>
-Validation: <exact missing or passed gate>
+tls.server_name: <DOMAIN>
+reality.handshake.server: <DOMAIN>
+reality.handshake.server_port: 443
 ```
 
-For serious work also report:
+Client uses the same intended `tls.server_name` plus the configured REALITY key/short ID and uTLS fingerprint.
 
-- coverage by candidate category;
-- certificate and remaining validity;
-- IP/ASN/region/CDN evidence;
-- TLS version, ALPN, redirect relationship, front-door type, organization category, and same-ASN preference evidence;
-- website footprint and traffic plausibility;
-- HTTPS count, pacing, statuses, TLS p50/p95/max;
-- isolated and production REALITY results;
-- dependencies, service state, and rollback;
-- evidence maturity and convergence state;
-- exact validation request budget.
+### mihomo / ShellCrash
 
-## Saved inventory and troubleshooting
-
-Obtain the target's safe inventory, SSH alias, path, and dependent configs through `$vps-manager` preflight. If direct inventory access is still necessary, read only the target entry from:
-
-```text
-D:\WPS SyncDisk\2.Tool\0.March\5.VPS\KV.yaml
-```
-
-Prefer aliases and key paths. If a stack or path changes, remap the chosen hostname without silently re-ranking. If RealityChecker and the real path disagree, preserve the working production target while investigating exact SNI pairing, DNS family, routing, clock, flow, fingerprint, and implementation/version differences.
+Treat mihomo as part of the tested REALITY profile. Verify its version and fingerprint. If authentication fails against every candidate, investigate server/client interoperability before reselecting SNI.

@@ -1,87 +1,75 @@
 # Candidate Discovery
 
-Read this reference for serious selection, reselection, requests to find something better, or decisions about whether to keep searching.
+Use this file only when the user does not already have enough candidates.
 
-## Coverage
+## Safety rule
 
-Complete these sources when the region provides enough candidates:
+Never run broad discovery scans from the production REALITY VPS. Broad scans can create an avoidable scanning footprint on the production IP.
 
-- authorized VPS `/24` and same-ASN/provider evidence;
-- at least 10 same-region ordinary organizations;
-- at least 10 small universities, research groups, departments, libraries, or colleges;
-- at least 10 regional B2B/service-provider candidates;
-- at least 10 social-service, health, community, charity, professional, chamber, media, or local institutional candidates.
+Run RealiTLScanner or comparable range discovery from:
 
-After the first potential A candidate appears, complete two independent expansion rounds. Use at least 10 new unique domains per round and change the source or organization category.
+1. the user's local machine; or
+2. a separate non-production host.
 
-## Layered discovery
+The production VPS should receive only the final 5-12 domain shortlist for low-rate exact-host probes.
 
-1. Identify the VPS ASN, provider, region, routed prefix, and nearby exchange or metro.
-2. Scan only the authorized `/24` when appropriate.
-3. Search passive public sources for same-provider or same-metro customer sites.
-4. Add ordinary regional organizations with established public websites.
-5. Add small universities/research institutions.
-6. Add local B2B, IT, SaaS, hosting, logistics, chambers, and media.
-7. Add community, health, charity, cultural, and professional institutions.
-8. Use famous global brands only as compatibility fallbacks.
+## Keep discovery bounded
 
-Useful queries:
+Start with the working incumbent, then collect candidates from:
 
-```text
-"<ASN_OR_PROVIDER>" "https"
-"<REGION>" "university" "https"
-"<REGION>" "managed service provider"
-"<REGION>" "museum" "organization"
-"<REGION>" "community services"
-```
+1. existing RealiTLScanner/RealityChecker output;
+2. nearby/regional ordinary HTTPS sites;
+3. direct-hosted candidates found through focused discovery.
+
+Stop once 5-12 plausible candidates exist. Apply the target gate, then keep only 2-3 verified-direct finalists.
+
+Do not require quotas by organization type, ASN, institution type, or TLD.
+
+## Preference-oriented discovery
+
+After basic hygiene, prefer adding candidates that may score well on the post-gate Preference fit:
+
+- sites whose resolved target ASN matches the VPS ASN;
+- verified universities, research institutes, libraries, museums, nonprofits, NGOs, public research bodies, and public cultural institutions.
+
+Do not scan an entire ASN from the production VPS. Find same-ASN candidates through passive/focused research, existing scanner datasets, or non-production discovery, then send only exact hostnames to the production target gate.
+
+Preference candidates still have to pass every normal hard gate. Same ASN or institution type never overrides CDN/shared-front-door rejection.
 
 ## RealiTLScanner
 
-Derive the `/24` from the VPS IP and run only that range:
-
-```powershell
-cd C:\RealityScan
-.\RealiTLScanner.exe -addr <CIDR_24> -port 443 -thread 20 -timeout 5 -out "<OUTPUT.csv>"
-```
-
-Clean output:
-
-```powershell
-python "<SKILL_DIR>\scripts\clean_reality_candidates.py" "<OUTPUT.csv>" --out "<CANDIDATES.txt>" --strict --show-rejects
-```
-
-Reject malformed names, IPs, wildcard entries, origin certificates, panels, monitoring/admin names, obvious proxy infrastructure, random numeric domains, suspicious TLDs, and famous unrelated front doors.
-
-## RealityChecker
-
-Use RealityChecker from the VPS as a compatibility filter:
+Use only authorized ranges and run it away from the production VPS. Example:
 
 ```bash
-mapfile -t domains < candidates.txt
-./reality-checker batch "${domains[@]}"
+./RealiTLScanner -addr <AUTHORIZED_CIDR> -port 443 -thread 20 -timeout 5 -out candidates.csv
 ```
 
-Preserve these as separate values:
+Treat scanner output as discovery evidence, not a final ranking.
 
-- submitted hostname;
-- certificate hostname/SAN;
-- redirect destination;
-- RealityChecker final domain.
+## Candidate hygiene
 
-Reject silent substitutions such as a parked-domain redirect to an unrelated registrar. Do not trust stars, CDN labels, popularity labels, or redirect handling without manual verification.
+Reject before probing:
 
-## Candidate record
+- malformed hostnames;
+- IP literals when a hostname/SNI is required;
+- wildcard strings such as `*.example.com` as the configured SNI;
+- localhost/private control-plane names;
+- duplicates;
+- `.cn`, `.ru`, `.ir` targets in strict GFW-risk mode;
+- hostnames containing `apple`, `icloud`, or `microsoft` in strict GFW-risk mode.
 
-Record:
+Do not reject an ordinary candidate only because its name contains generic strings such as `api`, `status`, or `test`.
 
-```text
-domain:
-category:
-discovery source:
-regional reason:
-scanner result:
-manual gate status:
-rejection reason:
-```
+## Strict no-CDN gate
 
-Do not claim same-ASN or same-region superiority until the natural-identity categories have also been checked.
+Reject confirmed shared CDN or platform front doors before REALITY testing or benchmarking.
+
+Use evidence in this order:
+
+1. CNAME chain to a known CDN/shared-edge domain;
+2. resolved IP ASN/provider clearly belonging to a CDN edge network;
+3. scanner or trusted network evidence identifying a shared front door.
+
+Cloudflare, CloudFront, Akamai, Fastly, Azure Front Door/CDN, and comparable shared edge services are hard rejects.
+
+An AWS/Azure/Google cloud ASN without clear origin-vs-edge evidence is `unknown`, not `direct`, in strict mode. It cannot receive S/A until manually verified as a non-shared origin.
