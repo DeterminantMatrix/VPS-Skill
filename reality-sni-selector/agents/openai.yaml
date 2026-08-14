@@ -1,4 +1,4 @@
 interface:
   display_name: "REALITY SNI Selector"
-  short_description: "Strict non-CDN REALITY SNI selection with S/A/B/C grading."
-  default_prompt: "Use $reality-sni-selector to compare REALITY target/SNI candidates with strict no-CDN and GFW-risk gates, validate the real client path when possible, and return the fixed S/A/B/C comparison table."
+  short_description: "Strict non-CDN REALITY SNI selection with S/A/B/C grading and same-ASN/institution preferences."
+  default_prompt: "Use $reality-sni-selector to compare REALITY target/SNI candidates with strict no-CDN and GFW-risk gates, validate the real client path when possible, and rank same-grade candidates by same-ASN and preferred-institution fit, and return the fixed S/A/B/C comparison table."

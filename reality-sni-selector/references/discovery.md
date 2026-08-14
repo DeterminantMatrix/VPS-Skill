@@ -25,6 +25,17 @@ Stop once 5-12 plausible candidates exist. Apply the target gate, then keep only
 
 Do not require quotas by organization type, ASN, institution type, or TLD.
 
+## Preference-oriented discovery
+
+After basic hygiene, prefer adding candidates that may score well on the post-gate Preference fit:
+
+- sites whose resolved target ASN matches the VPS ASN;
+- verified universities, research institutes, libraries, museums, nonprofits, NGOs, public research bodies, and public cultural institutions.
+
+Do not scan an entire ASN from the production VPS. Find same-ASN candidates through passive/focused research, existing scanner datasets, or non-production discovery, then send only exact hostnames to the production target gate.
+
+Preference candidates still have to pass every normal hard gate. Same ASN or institution type never overrides CDN/shared-front-door rejection.
+
 ## RealiTLScanner
 
 Use only authorized ranges and run it away from the production VPS. Example:

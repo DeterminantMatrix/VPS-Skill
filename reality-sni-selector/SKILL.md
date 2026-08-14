@@ -42,7 +42,7 @@ Do not perform these unless troubleshooting specifically requires them:
 - website content-size or organization-type scoring;
 - target traffic-volume estimation;
 - fixed 100-point scoring;
-- mandatory same-ASN/provider requirements;
+- mandatory same-ASN/provider requirements (same ASN is a preference, never a hard gate);
 - mandatory multi-window convergence;
 - large web-research sweeps after a clear winner exists.
 
@@ -51,7 +51,7 @@ Do not perform these unless troubleshooting specifically requires them:
 Infer what is already available. Gather only facts that change the result:
 
 - production REALITY listener port;
-- VPS region and production address family;
+- VPS region, production address family, and VPS public ASN (or public IP so the ASN can be resolved);
 - server core/version;
 - client core/version;
 - current target/SNI and whether it works;
@@ -69,7 +69,8 @@ Before selecting a new SNI:
 1. Confirm the production REALITY listener uses TCP/443.
 2. Record server core/version and client core/version.
 3. Confirm clocks are sane and the incumbent is known.
-4. If every candidate fails in the same way, stop SNI ranking and diagnose implementation interoperability.
+4. Record the VPS ASN when available; use it only as a post-gate ranking preference.
+5. If every candidate fails in the same way, stop SNI ranking and diagnose implementation interoperability.
 
 For Xray, do not automatically relax `minClientVer` or equivalent version checks to work around a client mismatch.
 
@@ -84,7 +85,7 @@ Keep about 5-12 plausible candidates for the cheap probe. Broad scans must run a
 Use the bundled probe from the production VPS against only the shortlist:
 
 ```bash
-python3 scripts/probe_target.py --family ipv4 <DOMAIN...>
+python3 scripts/probe_target.py --family ipv4 --vps-asn <VPS_ASN> <DOMAIN...>
 ```
 
 Use the production address family.
@@ -97,6 +98,7 @@ Record:
 - X25519;
 - remote IP;
 - CNAME chain and ASN/provider evidence;
+- whether all observed target addresses are in the same ASN as the VPS;
 - CDN/shared-front-door status;
 - redirect status;
 - high-risk target warning.
@@ -201,7 +203,32 @@ Use C for any hard rejection or current-environment incompatibility, including:
 
 When C is caused by implementation incompatibility, state that it is not evidence that the SNI itself is intrinsically bad.
 
-### 6. Roll out only when authorized
+### 6. Apply preference fit within the same grade
+
+After assigning S/A/B/C, calculate a simple **Preference fit** score only for ordering candidates inside the same grade:
+
+- `+2 same-ASN` — all observed target IPs with known ASN are in the same ASN as the VPS;
+- `+1 preferred-institution` — the hostname belongs to a verified university, research institute, library, museum, nonprofit, NGO, public research body, or public cultural institution;
+- `0` otherwise.
+
+Rules:
+
+- Preference fit never changes S/A/B/C.
+- Preference fit never rescues a CDN/shared-front-door or other C candidate.
+- Same ASN is stronger than institution type because it directly improves network topology plausibility, but it remains only a tie-breaker.
+- Do not infer institution type from `.edu`, `.org`, or a brand-like name alone. Use verified organization identity.
+- If candidates have the same grade and Preference fit, prefer higher REALITY success, then lower TLS worst-case latency, then the working incumbent.
+
+Examples:
+
+```text
+3/3 = same ASN + preferred institution
+2/3 = same ASN only
+1/3 = preferred institution only
+0/3 = neither
+```
+
+### 7. Roll out only when authorized
 
 Read [references/live-rollout.md](references/live-rollout.md) only for an authorized live change.
 
@@ -209,8 +236,8 @@ Read [references/live-rollout.md](references/live-rollout.md) only for an author
 
 Whenever comparing two or more candidates, always use this exact column order:
 
-| Rank | Grade | Domain | CDN/shared | TLS profile | REALITY / CN path | TLS stability | Target IP / network | Pros | Cons | Verdict |
-|---:|:---:|---|---|---|---|---|---|---|---|---|
+| Rank | Grade | Domain | CDN/shared | TLS profile | REALITY / CN path | TLS stability | Target IP / network | Preference fit | Pros | Cons | Verdict |
+|---:|:---:|---|---|---|---|---|---|---|---|---|---|
 
 Formatting rules:
 
@@ -219,7 +246,8 @@ Formatting rules:
 - `TLS profile`: compact form such as `1.3 ok / h2 ok / X25519 ok / cert ok`.
 - `REALITY / CN path`: include tested core pair and result, e.g. `Xray->mihomo / CN 5/5`.
 - `TLS stability`: `success rate / TLS p50 / worst`, e.g. `100% / 31 ms / 45 ms`.
-- `Target IP / network`: show observed IPs and only verified network/proximity facts.
+- `Target IP / network`: show observed IPs, target ASN, VPS ASN, and whether the ASN matches when verified.
+- `Preference fit`: show `0/3` to `3/3` plus short evidence, e.g. `3/3 same-ASN + university`.
 - `Pros` and `Cons`: concise, evidence-based.
 - `Verdict`: only `Primary`, `Backup`, or `Reject`.
 
