@@ -4,35 +4,30 @@ Run all discovery from the target VPS.
 
 ## Sources
 
-Use bounded combinations of:
+Use bounded combinations of fixed region seeds, Wikidata, OpenStreetMap/Overpass, OpenAlex, passive CT under already known institutional base domains, and IPv4 DNS validation. Never scan raw CIDRs or arbitrary IP space.
 
-- fixed region seeds;
-- Wikidata nearby institutional websites;
-- OpenStreetMap/Overpass institutional websites;
-- OpenAlex city institutions;
-- passive CT names under already known institutional base domains;
-- IPv4 DNS validation.
+Independent primary metadata sources may run concurrently.
 
-Do not scan raw CIDRs or arbitrary IP space.
+## QUICK profile
 
-## Coverage
+Aim for 150 validated public-IPv4 hostnames within a 400-source / 180-validated cap. Collect primary regional institutional sources first. If the source record pool reaches about 220 records, skip passive CT. Otherwise expand regional discovery and use CT only as backfill until the stop target/caps or CT failure budget is reached.
 
-Aim for at least 400 validated public-IPv4 hostnames within the fixed source/discovered caps.
+- `GOOD`: >=150 validated hostnames
+- `LIMITED`: 100-149
+- `SPARSE`: <100
 
-- `GOOD`: >=400 validated hostnames
+A GOOD QUICK run is `QUICK_CONFIDENT`, not an exhaustive internet search.
+
+## AUDIT profile
+
+Restore the broader source cap 1,200, validated cap 600, and coverage goal 400. AUDIT retains the broad expanded/CT pass.
+
+- `GOOD`: >=400
 - `LIMITED`: 100-399
 - `SPARSE`: <100
 
-`LIMITED` and `SPARSE` runs remain usable but must be labeled `PROVISIONAL`. Preserve source errors such as CT failure-budget exhaustion, HTTP errors, and timeouts.
+GOOD AUDIT coverage is `AUDIT_MATURE`; lower coverage is `PROVISIONAL`.
 
 ## Eligibility-pool diversity
 
-The 120-candidate eligibility cap is not a simple source-order slice. Keep the incumbent, then deterministically favor diversity across:
-
-- registrable domain;
-- initial IPv4 fingerprint;
-- organization label;
-- source priority;
-- measured locality/distance when present.
-
-Use progressive passes: strict diversity, relaxed diversity, then deterministic fill. Candidates left outside the budget receive `DEFERRED:DIVERSITY_BUDGET` when diversity caused the skip, otherwise `DEFERRED:PROBE_BUDGET`.
+QUICK selects at most 60 candidates; AUDIT at most 120. Keep the incumbent, then deterministically favor diversity across registrable domain, initial IPv4 fingerprint, organization, source priority, and locality. Use strict diversity, relaxed diversity, then deterministic fill. Deferred candidates are not failures.
