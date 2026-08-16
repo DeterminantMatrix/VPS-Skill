@@ -46,10 +46,10 @@ An `EROFS` failure caused only by `__pycache__` creation is a validation-environ
 
 ## Post-deployment contract check
 
-After an authorized worker deployment, run:
+After an authorized worker deployment, invoke the fixed wrapper **without** `run` in maintenance mode:
 
 ```text
-python3 scripts/controller_run.py <inventory-target> --worker-check-only
+ssh -T <declared-alias> /usr/local/bin/reality-sni-target-worker
 ```
 
-This still invokes only `/usr/local/bin/reality-sni-target-worker run`, but the frozen job operation is `contract_check`. It verifies wrapper reachability, worker protocol/version, and the six-file SHA-256 manifest without candidate discovery or SNI measurements. Start a fresh normal selection run afterward.
+Require the worker to return `FIXED_COMMAND_REQUIRED` and inspect its returned worker identity for protocol 4, implementation 4.1, and the expected six-file manifest. This performs no candidate discovery or SNI measurements. Then start a **new normal selection run**; the normal `run` job repeats the manifest check before target preflight/candidate traffic.
