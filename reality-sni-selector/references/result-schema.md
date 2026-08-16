@@ -1,12 +1,14 @@
-# Result schema
+# Result schema v4
 
-The target worker returns one JSON object containing:
+The worker returns one JSON object with:
 
 ```text
 schema_version
+worker
 status
 frozen_run
 preflight
+coverage
 regional_candidates
 candidates
 probe_pool
@@ -14,53 +16,53 @@ eligibility
 fast_benchmark
 deep_benchmark
 reality
+preliminary_top5
 top5
+comparison
 rejections
 warnings
 errors
 counts
 ```
 
-## Candidate states
+## Independent candidate dimensions
 
-Use independent dimensions where possible:
+Keep these separate:
 
-- `eligibility`: `ELIGIBLE`, `REVIEW_REQUIRED`, `HARD_REJECTED`, `BASELINE_ONLY`
-- `execution`: `PROBED`, `DEFERRED_BUDGET`, `TEMPORARY_ERROR`, `SOURCE_ERROR`, `NOT_SELECTED`
-- `final`: `SELECTABLE`, `REALITY_FAILED`, `RANKED_OUT`, `BASELINE_ONLY`, `PENDING_REALITY`
+- `policy_eligibility`: `ELIGIBLE`, `REVIEW_REQUIRED`, `HARD_REJECTED`, `BASELINE_ONLY`
+- `benchmark_eligibility`: `PASS` or a benchmark hard-failure state
+- `reality_compatibility`: `PASS`, `FAIL`, `NOT_TESTED`
+- `final_state`: `SELECTABLE`, `REVIEW_REQUIRED`, `POLICY_REJECTED`, `REALITY_FAILED`, `NOT_REALITY_TESTED`, `BASELINE`, or ranked-out equivalent
 
-## Required count distinctions
+`SELECTABLE` requires policy eligibility, benchmark pass, Reality PASS, and clean cleanup. Reality PASS never clears a policy rejection.
 
-Always distinguish:
+## Coverage
 
-- discovered/validated
-- selected into eligibility pool
-- deferred by probe budget
-- hard rejected
-- review required
-- fast benchmarked
-- deep benchmarked
-- Reality tested
-- selectable
+Return:
 
-A deferred candidate is never counted as failed.
+- `goal`
+- `validated`
+- `status`: `GOOD`, `LIMITED`, `SPARSE`
+- `selection_maturity`: `MATURE` only for GOOD, otherwise `PROVISIONAL`
+- `source_errors`
 
-## Top 5
+## Comparison
 
-Each row should include, when measurable:
+Produce a recommendation-sorted multi-dimensional comparison with at least five distinct measured domains whenever at least five exist. Include the incumbent baseline even if this extends the table beyond five rows.
 
-- hostname
-- incumbent flag
-- source/category/locality evidence
-- current IPv4 set
-- front-door classification and evidence
-- TLS versions / ALPN observations
-- certificate identity/expiry summary
-- fast and deep success rates
-- P50/P90/P95/MAD/max
-- per-IP consistency
-- Reality result
-- comparison with incumbent P50
-- warnings/review notes
+Each comparison row should include, when measurable:
 
-Unknown values must remain explicit `null`/`unknown`; do not invent them.
+- recommendation rank and level;
+- hostname;
+- final/policy state;
+- benchmark stage;
+- front-door class/provider/platform;
+- success rate;
+- P50/P90/P95/MAD/max;
+- per-IP consistency;
+- Reality compatibility and sanitized failure summary;
+- ASN/organization evidence and exact-target-ASN flag;
+- incumbent P50 improvement;
+- warnings/review notes.
+
+If fewer than five distinct measured domains exist, return all available rows and emit `INSUFFICIENT_COMPARISON_DOMAINS`.

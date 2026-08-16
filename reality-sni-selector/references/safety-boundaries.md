@@ -1,30 +1,35 @@
 # Safety boundaries
 
-## Allowed network activity
+## Allowed selection activity
 
-- One explicitly selected owned VPS per run.
-- Candidate traffic originates from that VPS.
-- IPv4 only for candidate qualification.
-- TCP/443 only.
-- DNS lookups, short TLS handshakes, bounded metadata API requests, passive CT queries, and short HTTPS HEAD requests.
-- Local Reality listeners only on `127.0.0.1` with ephemeral/high ports.
+- one explicitly selected owned VPS;
+- inventory read;
+- one fixed SSH command through an existing alias;
+- target-originated IPv4 TCP/443 candidate traffic;
+- DNS, short TLS handshakes, bounded metadata APIs, passive CT, and HEAD requests;
+- loopback-only temporary Reality listeners;
+- local run artifacts/report output.
 
-## Forbidden activity
+## Forbidden selection activity
 
-- Raw CIDR scanning.
-- Port scanning or trying alternate candidate ports.
-- Arbitrary user-provided destination IP/port execution.
-- Arbitrary remote shell.
-- Uploading code during a normal run.
-- Production sing-box edits/restarts.
-- Firewall, route, SSH, kernel, or network changes.
-- Webpage body downloads, large files, streaming, throughput tests, MTR/traceroute/iperf3.
-- Persisting secrets or raw secret-bearing temporary configs.
+- raw CIDR or port scanning;
+- arbitrary user destination/port execution;
+- arbitrary remote shell;
+- uploading or updating worker code during selection;
+- modifying production sing-box/service/firewall/route/SSH/network state;
+- installing packages;
+- webpage bodies, large files, streaming, throughput, MTR/traceroute/iperf3;
+- persisting secrets or raw secret-bearing configs/stderr;
+- silently editing Skill/AGENTS/memory/Git state.
 
-## Probe budgets
+## Worker contract
 
-All limits are frozen before probing. A candidate excluded because a cap is reached receives `DEFERRED:PROBE_BUDGET` or `NOT_SELECTED`; it is not a rejection.
+Selection requires the fixed absolute remote command and a matching v4 manifest. Version/build mismatch fails before candidate traffic.
 
 ## Cleanup invariant
 
-Reality temporary processes and files are a safety invariant. If cleanup cannot be proven, stop the remaining Reality batch with `TARGET_DIRTY_STATE`.
+If temporary Reality process/file cleanup cannot be proven, stop the remaining Reality batch with `TARGET_DIRTY_STATE`.
+
+## Repair boundary
+
+Worker deployment, source edits, package installation, and Git changes belong to separately authorized MAINTENANCE / REPAIR MODE. Start a new selection run after any repair.
