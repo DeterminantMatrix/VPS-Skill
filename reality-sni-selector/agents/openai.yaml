@@ -1,0 +1,3 @@
+interface:
+  display_name: "Reality SNI Selector"
+  short_description: "Target-measured VLESS Reality SNI discovery, benchmarking, and validation"

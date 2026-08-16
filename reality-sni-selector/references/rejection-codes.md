@@ -1,0 +1,54 @@
+# Status and rejection codes
+
+Keep policy rejection, operational error, review, and budget deferral separate.
+
+## Hard policy/correctness rejection
+
+- `HARD:NO_PUBLIC_IPV4`
+- `HARD:TLS_UNREACHABLE`
+- `HARD:CERT_INVALID`
+- `HARD:CERT_IDENTITY`
+- `HARD:KNOWN_PUBLIC_CDN`
+- `HARD:IP_INCONSISTENT`
+- `HARD:TLS_SUCCESS_LT_95`
+- `HARD:IP_SUCCESS_LT_90`
+- `HARD:REALITY_FAILED`
+
+## Review / warning
+
+- `REVIEW:EDGE_UNKNOWN`
+- `REVIEW:DNS_VOLATILE`
+- `REVIEW:CROSS_SITE_REDIRECT`
+- `REVIEW:REGION_MISMATCH`
+- `WARN:TLS12_ONLY`
+- `WARN:NO_H2`
+- `WARN:HTTP_403`
+- `WARN:HTTP_405`
+- `WARN:HTTP_429`
+- `WARN:HTTP_5XX`
+
+## Deferred / not selected
+
+- `DEFERRED:PROBE_BUDGET`
+- `NOT_SELECTED:FAST_POOL`
+- `NOT_SELECTED:DEEP_POOL`
+- `NOT_SELECTED:TOP5`
+- `RANKED_OUT`
+
+## Operational/source errors
+
+- `ERROR:DNS_TEMPORARY`
+- `ERROR:TLS_TEMPORARY`
+- `ERROR:HTTP_TEMPORARY`
+- `ERROR:SOURCE_UNAVAILABLE`
+- `ERROR:REALITY_CONFIG_INVALID`
+- `TARGET_WORKER_UNAVAILABLE`
+- `TARGET_EGRESS_UNAVAILABLE`
+- `LOCATION_DEGRADED`
+- `TARGET_DIRTY_STATE`
+
+## Batch-invalid states
+
+- `INVALID:REALITY_CONTROL_FAILED`
+
+Do not place `DEFERRED`, `NOT_SELECTED`, or temporary `ERROR` rows in the same semantic bucket as hard rejections.
