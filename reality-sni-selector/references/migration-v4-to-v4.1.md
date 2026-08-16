@@ -14,5 +14,5 @@ Key changes:
 - Target selectors may be exact IPv4/name/alias or a uniquely high-confidence fuzzy inventory name; fuzzy decisions are explicitly recorded.
 - Controller artifacts always go to a dedicated run directory instead of the invocation parent directory.
 - Exit 126/127 with `No such file or directory`/missing-command/bad-interpreter evidence maps to `TARGET_WORKER_UNAVAILABLE`, with a bounded secret-redacted stderr summary in controller metadata.
-- `--worker-check-only` provides a read-only post-deployment wrapper/protocol/manifest check through the same fixed remote command.
+- Maintenance mode verifies the deployed wrapper without `run`; the returned worker identity provides protocol/version/manifest evidence without candidate traffic.
 - Read-only local Skill validation must redirect Python bytecode caches or use a writable checkout.
