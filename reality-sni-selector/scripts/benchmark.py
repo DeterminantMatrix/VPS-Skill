@@ -8,25 +8,52 @@ from common import edge_priority, policy_priority, source_priority, stats
 from target_probe import resolve_ipv4_observations, tls_probe_ip
 
 
-def benchmark_candidates(candidates: list[dict[str, Any]], *, samples: int, timeout: float = 5.0, deep: bool = False) -> list[dict[str, Any]]:
+def benchmark_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    samples: int,
+    timeout: float = 5.0,
+    deep: bool = False,
+    prior_results: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Benchmark candidates to a total sample count, optionally reusing same-run samples."""
+    prior_map = {r.get("hostname"): r for r in (prior_results or []) if r.get("hostname")}
     state: dict[str, dict[str, Any]] = {}
     for candidate in candidates:
         host = candidate["hostname"]
         dns = resolve_ipv4_observations(host, observations=3 if deep else 2)
         ips = dns["common_ipv4"] or candidate.get("current_ipv4") or candidate.get("initial_ipv4") or []
-        state[host] = {"candidate": candidate, "dns": dns, "ips": ips, "samples": []}
+        prior = prior_map.get(host) or {}
+        reused = [dict(r) for r in (prior.get("samples") or [])[:samples]]
+        for row in reused:
+            row.setdefault("phase", "fast-reused" if deep else "reused")
+        state[host] = {
+            "candidate": candidate,
+            "dns": dns,
+            "ips": ips,
+            "samples": reused,
+            "reused_samples": len(reused),
+        }
 
-    for round_no in range(samples):
+    # Interleave only the missing samples. Deep mode therefore tops Fast samples up
+    # to the requested total instead of discarding and re-measuring them.
+    remaining = max((samples - len(item["samples"]) for item in state.values()), default=0)
+    for _ in range(remaining):
         for candidate in candidates:
             host = candidate["hostname"]
             item = state[host]
-            ips = item["ips"]
-            if not ips:
-                item["samples"].append({"success": False, "ip": None, "error": "NO_IPV4", "elapsed_ms": None, "round": round_no + 1})
+            if len(item["samples"]) >= samples:
                 continue
-            ip = ips[round_no % len(ips)]
+            ips = item["ips"]
+            sample_index = len(item["samples"])
+            if not ips:
+                item["samples"].append({"success": False, "ip": None, "error": "NO_IPV4", "elapsed_ms": None,
+                                        "round": sample_index + 1, "phase": "deep" if deep else "fast"})
+                continue
+            ip = ips[sample_index % len(ips)]
             row = tls_probe_ip(host, ip, timeout=timeout)
-            row["round"] = round_no + 1
+            row["round"] = sample_index + 1
+            row["phase"] = "deep" if deep else "fast"
             item["samples"].append(row)
             time.sleep(0.03)
 
@@ -36,8 +63,9 @@ def benchmark_candidates(candidates: list[dict[str, Any]], *, samples: int, time
         rows = item["samples"]
         ok = [r for r in rows if r.get("success")]
         values = [float(r["elapsed_ms"]) for r in ok if r.get("elapsed_ms") is not None]
+        observed_ips = sorted({str(r.get("ip")) for r in rows if r.get("ip")} | set(item["ips"]))
         per_ip: dict[str, dict[str, Any]] = {}
-        for ip in item["ips"]:
+        for ip in observed_ips:
             ip_rows = [r for r in rows if r.get("ip") == ip]
             ip_ok = [r for r in ip_rows if r.get("success")]
             per_ip[ip] = {
@@ -61,6 +89,8 @@ def benchmark_candidates(candidates: list[dict[str, Any]], *, samples: int, time
             "current_ipv4": item["ips"],
             "samples": rows,
             "sample_count": len(rows),
+            "reused_samples": item["reused_samples"],
+            "new_samples": len(rows) - item["reused_samples"],
             "successes": len(ok),
             "success_rate": round(len(ok) / len(rows), 4) if rows else 0.0,
             "per_ip": per_ip,
