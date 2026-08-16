@@ -1,4 +1,4 @@
-# Result schema v4 / implementation 4.2
+# Result schema v4 / implementation 4.3.5
 
 The worker returns one JSON object containing at least:
 
@@ -28,34 +28,61 @@ counts
 
 ## Independent candidate dimensions
 
-Keep policy eligibility, benchmark eligibility, Reality compatibility, and final state separate. `SELECTABLE` requires a clean policy state, benchmark reliability pass, Reality 5/5 PASS, and clean cleanup. Reality PASS never clears a policy rejection.
+Keep these dimensions separate:
+
+- `protocol_compliance` / controller-derived `protocol_compliance_grade`;
+- `policy_eligibility` / `policy_grade` for safety/front-door policy; protocol hard failures are reported separately;
+- benchmark reliability;
+- `reality_compatibility` / `reality_grade`;
+- `final_state`.
+
+`SELECTABLE` requires protocol minimum PASS, clean safety/policy state, benchmark reliability pass, Reality 5/5 PASS, and clean cleanup. Protocol, safety-policy, and reliability hard-rejection code sets remain separately exposed so a TLS 1.2 failure is never mislabeled as a CDN/policy failure. Reality PASS never clears a protocol or policy rejection.
+
+The controller derives these final-decision fields:
+
+- `protocol_compliance_grade`;
+- `tls_reliability_grade` (`tls_grade` remains a compatibility alias only);
+- `policy_grade`;
+- `reality_grade`;
+- `performance_grade`;
+- `runtime_stability_grade` and reason codes;
+- `network_affinity_grade` / `network_affinity_code`;
+- `durability_risk` and reason codes;
+- `candidate_confidence`;
+- `search_confidence`;
+- `overall_recommendation_confidence`;
+- `recommendation_grade` / `recommendation_label`;
+- `decision_reasons`;
+- `ranking_rationale_code` / `ranking_rationale`;
+- `model_commentary_facts`.
+
+`protocol_compliance` records TLS1.3, h2, certificate/identity and redirect-policy evidence. `network_affinity` records only directly observed facts such as SAME_ASN, same organization, IPv4 /16 prefix, or same country; it is not a hidden-route inference.
+
+Durability/operational risk is an estimate from current observable signals only, not a future guarantee.
 
 ## Current SNI assessment
 
-`incumbent_assessment` contains:
+`incumbent_assessment` contains hostname, verdict/code, confidence, reason codes, current protocol/policy/reliability/P50/P95/MAD/Reality-control metrics, observed TLS version/ALPN, Network Affinity, best selectable alternative, relative improvements, and explicit `tradeoff_code` / `tradeoff_text`.
 
-- hostname;
-- machine code and Chinese verdict;
-- confidence;
-- reason codes;
-- current policy/reliability/P50/P95/MAD/Reality-control metrics;
-- best fully selectable alternative and relative improvements when available.
+## Coverage and confidence
 
-See `incumbent-assessment.md` for verdict precedence.
+Keep search confidence distinct from each candidate's measurement confidence. SPARSE coverage can coexist with HIGH candidate confidence for a fully measured SNI.
 
-## Coverage
+## Adaptive refill evidence
 
-Return profile (`quick`/`audit`), goal, validated count, `GOOD/LIMITED/SPARSE`, selection maturity (`QUICK_CONFIDENT`, `AUDIT_MATURE`, or `PROVISIONAL`), CT-skip evidence, and source errors.
+`reality.adaptive_refill` and `counts` include:
 
-## Comparison
+- initial Deep count;
+- refill batch/deep cap/reality cap;
+- refill rounds and added Deep candidates;
+- total Reality candidates tested/passed;
+- adaptive stop reason;
+- final selectable count/target.
 
-Produce a recommendation-sorted multi-dimensional comparison with at least five distinct measured domains whenever at least five exist. Include the incumbent baseline even if this extends the table. Include final/policy state, front-door/platform, TLS success, P50/P90/P95/MAD/max, Reality result/failure stage, ASN/organization evidence, and incumbent P50 improvement. Never fabricate rows.
+Typical stop reasons: `SELECTABLE_TARGET_MET`, `REALITY_CANDIDATE_CAP_REACHED`, `DEEP_POOL_CAP_REACHED`, `FAST_SURVIVORS_EXHAUSTED`, `REALITY_CONTROL_FAILED`, `REALITY_ENVIRONMENT_UNAVAILABLE`, or `TARGET_DIRTY_STATE`.
 
-## Efficiency counters
+## Decision summary and reporting
 
-Counts should include Fast/Deep candidate counts, reused Fast samples inside Deep, newly measured Deep samples, Reality candidates attempted, Reality passes, selectable count, and selectable target.
+`decision-summary.json` uses reporting contract `v4.3.5` and contains the recommended SNI/grade, candidate/search/overall confidence, P50 equivalence window, selectable count/target, coverage, and incumbent tradeoff.
 
-
-## Controller worker lifecycle artifact
-
-The controller writes `worker-lifecycle.json` before freeze. It records the preflight identity state, whether the fixed worker was already ready/installed/upgraded, the expected manifest/wrapper hash, backup metadata when applicable, and the post-bootstrap identity result. This artifact contains no SNI candidate measurements.
+`report.md` must follow the modular contract in `reporting.md` and never fabricate missing Top-5 rows.

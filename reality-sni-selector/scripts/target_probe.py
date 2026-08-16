@@ -164,7 +164,7 @@ def http_head_ip(hostname: str, ip: str, timeout: float = 6.0, max_header_bytes:
     try:
         with socket.create_connection((ip, 443), timeout=timeout) as raw:
             with context.wrap_socket(raw, server_hostname=hostname) as sock:
-                request = f"HEAD / HTTP/1.1\r\nHost: {hostname}\r\nUser-Agent: reality-sni-selector/4\r\nConnection: close\r\n\r\n".encode("ascii")
+                request = f"HEAD / HTTP/1.1\r\nHost: {hostname}\r\nUser-Agent: reality-sni-selector/4.3.5\r\nConnection: close\r\n\r\n".encode("ascii")
                 sock.sendall(request)
                 buf = bytearray()
                 while b"\r\n\r\n" not in buf and len(buf) < max_header_bytes:
@@ -267,6 +267,50 @@ def classify_front_door(
     return {"class": "UNKNOWN_EDGE_EVIDENCE", "provider": None, "platform": None, "evidence": evidence}
 
 
+def summarize_protocol_compliance(
+    ips: list[str],
+    tls_rows: list[dict[str, Any]],
+    heads: list[dict[str, Any]],
+    hard_rejections: list[str],
+) -> dict[str, Any]:
+    """Summarize the REALITY target minimum protocol evidence without inventing unknowns."""
+    per_ip: dict[str, dict[str, Any]] = {}
+    for ip in ips:
+        successes = [r for r in tls_rows if r.get("ip") == ip and r.get("success")]
+        per_ip[ip] = {
+            "tls13": any(r.get("tls_version") == "TLSv1.3" for r in successes),
+            "h2": any(r.get("alpn") == "h2" for r in successes),
+            "tls_versions": sorted({str(r.get("tls_version")) for r in successes if r.get("tls_version")}),
+            "alpn": sorted({str(r.get("alpn")) for r in successes if r.get("alpn")}),
+        }
+
+    successful_heads = [h for h in heads if h.get("success")]
+    redirect_state = "UNKNOWN" if not successful_heads else "PASS"
+    if "HARD:REALITY_CROSS_SITE_REDIRECT" in hard_rejections:
+        redirect_state = "FAIL"
+
+    protocol_codes = {
+        "HARD:TLS_UNREACHABLE",
+        "HARD:CERT_INVALID",
+        "HARD:CERT_IDENTITY",
+        "HARD:REALITY_MIN_TLS13",
+        "HARD:REALITY_MIN_H2",
+        "HARD:REALITY_CROSS_SITE_REDIRECT",
+    }
+    failed = sorted(code for code in hard_rejections if code in protocol_codes)
+    state = "FAIL" if failed else "REVIEW" if redirect_state == "UNKNOWN" else "PASS"
+    successful_tls = any(r.get("success") for r in tls_rows)
+    return {
+        "state": state,
+        "tls13": bool(per_ip) and all(v["tls13"] for v in per_ip.values()),
+        "h2": bool(per_ip) and all(v["h2"] for v in per_ip.values()),
+        "certificate": "FAIL" if any(c in hard_rejections for c in {"HARD:CERT_INVALID", "HARD:CERT_IDENTITY"}) else "PASS" if successful_tls else "UNKNOWN",
+        "redirect_policy": redirect_state,
+        "per_ip": per_ip,
+        "hard_failures": failed,
+    }
+
+
 def gate_candidate(
     candidate: dict[str, Any],
     *,
@@ -289,6 +333,7 @@ def gate_candidate(
             "tls": [],
             "http": None,
             "front_door": {"class": "UNKNOWN_TOOLING", "provider": None, "platform": None, "evidence": []},
+            "protocol_compliance": {"state": "FAIL", "tls13": False, "h2": False, "certificate": "UNKNOWN", "redirect_policy": "UNKNOWN", "per_ip": {}, "hard_failures": ["HARD:NO_PUBLIC_IPV4"]},
             "hard_rejections": hard,
             "review": review,
             "warnings": warnings,
@@ -314,12 +359,12 @@ def gate_candidate(
             hard.append("HARD:TLS_UNREACHABLE")
         elif len(success) < len(rows):
             review.append("REVIEW:TCP_TLS_UNSTABLE_GATE")
+        if success and not any(r.get("tls_version") == "TLSv1.3" for r in success):
+            hard.append("HARD:REALITY_MIN_TLS13")
+        if success and not any(r.get("alpn") == "h2" for r in success):
+            hard.append("HARD:REALITY_MIN_H2")
 
     successes = [r for r in tls_rows if r.get("success")]
-    if successes and not any(r.get("tls_version") == "TLSv1.3" for r in successes):
-        warnings.append("WARN:TLS12_ONLY")
-    if successes and not any(r.get("alpn") == "h2" for r in successes):
-        warnings.append("WARN:NO_H2")
 
     cnames, cname_backend = dig_cname(hostname)
     heads: list[dict[str, Any]] = []
@@ -396,13 +441,14 @@ def gate_candidate(
             try:
                 redirect_host = urlparse(location).hostname
                 if redirect_host and not same_site(hostname, redirect_host):
-                    review.append("REVIEW:CROSS_SITE_REDIRECT")
+                    hard.append("HARD:REALITY_CROSS_SITE_REDIRECT")
             except ValueError:
-                pass
+                review.append("REVIEW:REDIRECT_PARSE_FAILED")
 
     hard = sorted(set(hard))
     review = sorted(set(review))
     warnings = sorted(set(warnings))
+    protocol = summarize_protocol_compliance(ips, tls_rows, heads, hard)
     eligibility = "HARD_REJECTED" if hard else "REVIEW_REQUIRED" if review else "ELIGIBLE"
     return {
         **candidate,
@@ -411,6 +457,7 @@ def gate_candidate(
         "tls": tls_rows,
         "http": heads,
         "front_door": front,
+        "protocol_compliance": protocol,
         "hard_rejections": hard,
         "review": review,
         "warnings": warnings,

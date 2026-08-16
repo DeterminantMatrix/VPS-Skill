@@ -1,6 +1,6 @@
-# Target worker installation / automatic lifecycle v4.2
+# Target worker installation / automatic lifecycle v4.3.5
 
-Normal v4.2 selection owns readiness of its reviewed fixed worker. Manual predeployment is no longer required when the existing SSH alias can write the fixed paths.
+Normal v4.3.5 selection owns readiness of its reviewed fixed worker. Manual predeployment is no longer required when the existing SSH alias can write the fixed paths.
 
 See `worker-lifecycle.md` for the automatic sequence.
 
@@ -38,7 +38,7 @@ It accepts only two fixed operations:
 
 - no worker paths: install automatically;
 - valid `.managed.json`: upgrade automatically if stale;
-- exact reviewed pre-marker v4/v4.1 manifest and wrapper hash: treat as legacy-managed and upgrade;
+- exact reviewed pre-marker v4/v4.1 manifest/wrapper: treat as legacy-managed and upgrade;
 - anything else at the fixed paths: fail `WORKER_PATH_CONFLICT` without overwriting.
 
 Existing managed installations are backed up before replacement. Stage and post-install hashes must match before selection can freeze.

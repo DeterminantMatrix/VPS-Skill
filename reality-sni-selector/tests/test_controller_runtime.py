@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import decision_postprocess  # noqa: E402
 from controller_run import (  # noqa: E402
     classify_remote_failure,
     inventory_guard,
@@ -92,6 +94,29 @@ hosts:
         self.assertNotIn("abc123", text)
         self.assertNotIn("hello", text)
         self.assertIn("<redacted>", text)
+
+    def test_decision_postprocess_writes_structured_artifacts(self):
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td)
+            result = {
+                "status": "SUCCESS",
+                "coverage": {"status": "SPARSE", "validated": 57, "goal": 200, "profile": "quick"},
+                "frozen_run": {"incumbent": "old.example", "profile": {"latency_target_ms": 60.0, "p50_equivalence_ms": 2.0}},
+                "counts": {"selectable_target": 5},
+                "top5": [],
+                "comparison": [],
+                "incumbent_assessment": {"verdict": "暂无法评估", "code": "UNABLE_TO_ASSESS", "metrics": {}},
+            }
+            (run_dir / "target-result.json").write_text(json.dumps(result), encoding="utf-8")
+            self.assertTrue(decision_postprocess.postprocess_run(run_dir))
+            self.assertTrue((run_dir / "decision-summary.json").is_file())
+            self.assertTrue((run_dir / "top5.json").is_file())
+            self.assertIn("Reality SNI 优选决策报告", (run_dir / "report.md").read_text(encoding="utf-8"))
+
+    def test_stage_status_freeze_text_has_no_stale_version_literal(self):
+        source = (ROOT / "scripts" / "controller_runtime.py").read_text(encoding="utf-8")
+        self.assertNotIn("v4.2 quick profile frozen", source)
+        self.assertIn("profile frozen only after exact worker readiness", source)
 
 
 if __name__ == "__main__":

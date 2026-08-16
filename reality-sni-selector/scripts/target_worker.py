@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import os
 import re
 import shutil
@@ -16,6 +17,9 @@ from common import (
     IMPLEMENTATION_VERSION,
     JOB_SCHEMA_VERSION,
     PROFILE_NAME,
+    PROTOCOL_HARD_CODES,
+    RELIABILITY_HARD_CODES,
+    SAFETY_HARD_CODES,
     WORKER_PROTOCOL,
     compute_worker_manifest,
     edge_priority,
@@ -37,13 +41,15 @@ ABSOLUTE_LIMITS = {
     "discovered_cap": 600,
     "eligibility_pool": 120,
     "fast_pool": 50,
-    "deep_pool": 10,
+    "deep_pool": 12,
+    "deep_pool_cap": 24,
+    "deep_refill_batch": 8,
     "top_n": 5,
     "comparison_min_domains": 10,
     "fast_samples": 10,
     "deep_samples": 30,
     "reality_attempts": 5,
-    "reality_candidate_cap": 10,
+    "reality_candidate_cap": 24,
     "selectable_target": 5,
     "ct_base_cap": 60,
     "ct_max_per_domain": 30,
@@ -116,6 +122,12 @@ def validate_job(job: Any) -> dict[str, Any]:
         raise ValueError("comparison must target at least five domains")
     if limits["reality_candidate_cap"] < limits["selectable_target"]:
         raise ValueError("Reality candidate cap cannot be smaller than selectable target")
+    if limits["deep_pool"] > limits["deep_pool_cap"]:
+        raise ValueError("initial Deep pool cannot exceed Deep cap")
+    if limits["deep_pool_cap"] > limits["fast_pool"]:
+        raise ValueError("Deep cap cannot exceed Fast pool")
+    if limits["deep_refill_batch"] > limits["deep_pool_cap"]:
+        raise ValueError("Deep refill batch cannot exceed Deep cap")
     profile = job.get("profile")
     if not isinstance(profile, dict):
         raise ValueError("missing profile")
@@ -535,12 +547,61 @@ def gate_selection_key(row: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def enrich_deep_asn(rows: list[dict[str, Any]], target_asn: Any, metadata: IPMetadataCache) -> None:
+def _normalized_org(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def classify_network_affinity(
+    target_ip: str | None,
+    target_location: dict[str, Any] | None,
+    candidate_evidence: dict[str, Any] | None,
+    candidate_ips: list[str],
+) -> dict[str, Any]:
+    """Classify only directly observed network-affinity facts; never infer hidden topology."""
+    target_location = target_location or {}
+    candidate_evidence = candidate_evidence or {}
+    target_asn = target_location.get("asn")
+    candidate_asn = candidate_evidence.get("asn")
+    if target_asn and candidate_asn and str(target_asn) == str(candidate_asn):
+        return {"grade": "A+", "code": "SAME_ASN", "rank": 0, "evidence": [f"asn:{candidate_asn}"]}
+
+    target_org = _normalized_org(target_location.get("organization"))
+    candidate_org = _normalized_org(candidate_evidence.get("organization"))
+    if target_org and candidate_org and target_org == candidate_org:
+        return {"grade": "A", "code": "SAME_ORGANIZATION", "rank": 1, "evidence": [candidate_evidence.get("organization")]}
+
+    if target_ip:
+        try:
+            target_addr = ipaddress.ip_address(target_ip)
+            if isinstance(target_addr, ipaddress.IPv4Address):
+                network16 = ipaddress.ip_network(f"{target_addr}/16", strict=False)
+                if any(ipaddress.ip_address(ip) in network16 for ip in candidate_ips):
+                    return {"grade": "A", "code": "SAME_IPV4_PREFIX16", "rank": 1, "evidence": [str(network16)]}
+        except ValueError:
+            pass
+
+    target_country = str(target_location.get("country_code") or "").upper()
+    candidate_country = str(candidate_evidence.get("country_code") or "").upper()
+    if target_country and candidate_country and target_country == candidate_country:
+        return {"grade": "B", "code": "SAME_COUNTRY", "rank": 2, "evidence": [target_country]}
+    if candidate_evidence:
+        return {"grade": "C", "code": "DIFFERENT_OR_REMOTE_NETWORK", "rank": 3, "evidence": [str(candidate_asn or "asn-unknown"), candidate_country or "country-unknown"]}
+    return {"grade": "UNKNOWN", "code": "NETWORK_AFFINITY_UNKNOWN", "rank": 4, "evidence": []}
+
+
+def enrich_deep_asn(
+    rows: list[dict[str, Any]],
+    target_location: dict[str, Any] | None,
+    target_ip: str | None,
+    metadata: IPMetadataCache,
+) -> None:
+    target_asn = (target_location or {}).get("asn")
     for row in rows:
         ips = row.get("current_ipv4") or []
         evidence = metadata.lookup(ips[0]) if ips else None
         row["asn_evidence"] = evidence
         row["exact_target_asn"] = bool(evidence and target_asn and str(evidence.get("asn")) == str(target_asn))
+        row["network_affinity"] = classify_network_affinity(target_ip, target_location, evidence, ips)
         network_class, network_name, network_evidence = classify_network_organization(evidence)
         if row.get("incumbent"):
             continue
@@ -566,6 +627,28 @@ def enrich_deep_asn(rows: list[dict[str, Any]], target_asn: Any, metadata: IPMet
                 "platform": None,
                 "evidence": sorted(set((row.get("front_door") or {}).get("evidence", []) + ([network_evidence] if network_evidence else []))),
             }
+
+
+def select_deep_refill_batch(
+    fast_rows: list[dict[str, Any]],
+    deep_rows: list[dict[str, Any]],
+    batch_size: int,
+    deep_cap: int,
+) -> list[dict[str, Any]]:
+    """Take the next already-Fast-measured eligible candidates without repeating Deep work."""
+    existing = {row.get("hostname") for row in deep_rows}
+    room = max(0, int(deep_cap) - len(deep_rows))
+    limit = min(max(0, int(batch_size)), room)
+    if limit <= 0:
+        return []
+    pending = [
+        row for row in fast_rows
+        if not row.get("incumbent")
+        and row.get("hostname") not in existing
+        and row.get("eligibility") == "ELIGIBLE"
+        and not row.get("hard_rejections")
+    ]
+    return pending[:limit]
 
 
 def _run_reality_control(hostname: str, ips: list[str], env: dict[str, Any]) -> dict[str, Any]:
@@ -628,8 +711,15 @@ def _rejection_rows(eligibility: list[dict[str, Any]], deep: list[dict[str, Any]
 def _recommendation_state(row: dict[str, Any], reality_by_host: dict[str, dict[str, Any]]) -> tuple[int, str, str]:
     if row.get("incumbent"):
         return 3, "BASELINE", "BASELINE"
-    if row.get("hard_rejections"):
+    hard = set(row.get("hard_rejections") or [])
+    if hard & PROTOCOL_HARD_CODES:
+        return 6, "EXCLUDED", "PROTOCOL_REJECTED"
+    if hard & SAFETY_HARD_CODES:
         return 6, "EXCLUDED", "POLICY_REJECTED"
+    if hard & RELIABILITY_HARD_CODES:
+        return 6, "EXCLUDED", "BENCHMARK_REJECTED"
+    if hard:
+        return 6, "EXCLUDED", "HARD_REJECTED"
     test = reality_by_host.get(row["hostname"])
     if test and test.get("passed"):
         if row.get("eligibility") == "ELIGIBLE":
@@ -685,19 +775,29 @@ def assess_incumbent(
     reliability = _reliability_failures(incumbent_deep)
     result["metrics"] = {
         "policy_state": incumbent_gate.get("eligibility"),
+        "protocol_compliance": incumbent_gate.get("protocol_compliance"),
         "hard_rejections": hard,
         "review": review,
         "success_rate": incumbent_deep.get("success_rate"),
         "p50_ms": incumbent_deep.get("p50_ms"),
         "p95_ms": incumbent_deep.get("p95_ms"),
         "mad_ms": incumbent_deep.get("mad_ms"),
+        "tls_versions": incumbent_deep.get("tls_versions") or [],
+        "alpn_protocols": incumbent_deep.get("alpn_protocols") or [],
+        "network_affinity": incumbent_deep.get("network_affinity"),
         "reality_control": "PASS" if control and control.get("passed") else "FAIL" if control else "NOT_RUN",
         "reality_control_retried": bool(control and control.get("retried")),
     }
 
     if hard:
         result.update(code="REPLACE_REQUIRED", verdict="需要更换", confidence="HIGH")
-        result["reasons"].append("CURRENT_SNI_POLICY_HARD_REJECT")
+        hard_set = set(hard)
+        if hard_set & PROTOCOL_HARD_CODES:
+            result["reasons"].append("CURRENT_SNI_PROTOCOL_HARD_REJECT")
+        if hard_set & SAFETY_HARD_CODES:
+            result["reasons"].append("CURRENT_SNI_POLICY_HARD_REJECT")
+        if hard_set - PROTOCOL_HARD_CODES - SAFETY_HARD_CODES:
+            result["reasons"].append("CURRENT_SNI_OTHER_HARD_REJECT")
         result["reasons"].extend(hard)
         return result
     if reliability:
@@ -802,13 +902,7 @@ def build_comparison(
         else:
             row["incumbent_p50_improvement_pct"] = None
         scored.append(row)
-    scored.sort(key=lambda r: (
-        r["recommendation_group"],
-        -float(r.get("success_rate") or 0.0),
-        float(r.get("p50_ms")) if r.get("p50_ms") is not None else 1e9,
-        float(r.get("p95_ms")) if r.get("p95_ms") is not None else 1e9,
-        r["hostname"],
-    ))
+    scored.sort(key=lambda r: (r["recommendation_group"],) + deep_rank_key(r))
     desired = max(5, int(minimum))
     chosen = scored[:desired]
     incumbent_row = next((r for r in scored if r["hostname"] == incumbent), None)
@@ -926,10 +1020,14 @@ def run(job: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
 
     incumbent_fast = next((r for r in fast if r.get("incumbent")), None)
     non_inc_fast = [r for r in fast if not r.get("incumbent")]
+    eligible_non_inc_fast = [
+        r for r in non_inc_fast
+        if r.get("eligibility") == "ELIGIBLE" and not r.get("hard_rejections")
+    ]
     deep_seed = []
     if incumbent_fast:
         deep_seed.append(incumbent_fast)
-    deep_seed.extend(non_inc_fast[: max(0, job["limits"]["deep_pool"] - len(deep_seed))])
+    deep_seed.extend(eligible_non_inc_fast[: max(0, job["limits"]["deep_pool"] - len(deep_seed))])
     deep = benchmark_candidates(
         deep_seed,
         samples=job["limits"]["deep_samples"],
@@ -938,13 +1036,11 @@ def run(job: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
         prior_results=fast,
     )
     deep = [apply_deep_policy(r, incumbent=bool(r.get("incumbent"))) for r in deep]
-    target_asn = (pre.get("location") or {}).get("asn")
-    enrich_deep_asn(deep, target_asn, metadata)
+    target_location = pre.get("location") or {}
+    target_ip = pre.get("observed_egress_ip")
+    enrich_deep_asn(deep, target_location, target_ip, metadata)
     deep.sort(key=deep_rank_key)
-
-    ranked_survivors = [r for r in deep if not r.get("incumbent") and not r.get("hard_rejections")]
-    prelim = ranked_survivors[: job["limits"]["top_n"]]
-    reality_queue = ranked_survivors[: job["limits"]["reality_candidate_cap"]]
+    initial_deep_count = len(deep)
 
     reality_env = reality_environment()
     reality: dict[str, Any] = {"environment": reality_env, "status": "NOT_RUN", "control": None, "candidates": []}
@@ -952,14 +1048,24 @@ def run(job: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
     status = "SUCCESS"
     incumbent_deep = next((r for r in deep if r.get("incumbent")), None)
     incumbent_p50 = incumbent_deep.get("p50_ms") if incumbent_deep else None
+    target_selectable = int(job["limits"]["selectable_target"])
+    reality_cap = int(job["limits"]["reality_candidate_cap"])
+    refill_info = {
+        "enabled": True,
+        "initial_deep_count": initial_deep_count,
+        "deep_cap": int(job["limits"]["deep_pool_cap"]),
+        "refill_batch": int(job["limits"]["deep_refill_batch"]),
+        "refill_rounds": 0,
+        "refill_deep_count": 0,
+        "reality_cap": reality_cap,
+        "stop_reason": None,
+    }
 
-    if not reality_queue:
-        reality["status"] = "NOT_RUN_NO_DEEP_SURVIVORS"
-        status = "NO_DEEP_SURVIVORS"
-    elif not reality_env.get("ready"):
+    if not reality_env.get("ready"):
         reality["status"] = "UNAVAILABLE"
         warnings.append(f"REALITY_UNAVAILABLE:{reality_env.get('reason')}")
         status = "PARTIAL_REALITY_UNAVAILABLE"
+        refill_info["stop_reason"] = "REALITY_ENVIRONMENT_UNAVAILABLE"
     else:
         incumbent_gate_any = next((r for r in eligibility if r["hostname"] == job["incumbent"]), None)
         incumbent_ips = (incumbent_gate_any or {}).get("current_ipv4") or (incumbent_gate_any or {}).get("initial_ipv4") or []
@@ -972,42 +1078,95 @@ def run(job: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
         if not control.get("passed"):
             reality["status"] = "INVALID:REALITY_CONTROL_FAILED"
             status = "INVALID_REALITY_CONTROL"
+            refill_info["stop_reason"] = "REALITY_CONTROL_FAILED"
         else:
             reality["status"] = "RUNNING"
-            target_selectable = int(job["limits"]["selectable_target"])
-            for row in reality_queue:
+            tested_hosts: set[str] = set()
+            while True:
+                deep.sort(key=deep_rank_key)
+                pending = [
+                    row for row in deep
+                    if not row.get("incumbent")
+                    and row.get("eligibility") == "ELIGIBLE"
+                    and not row.get("hard_rejections")
+                    and row.get("hostname") not in tested_hosts
+                ]
+                while pending and len(reality["candidates"]) < reality_cap and len(final_top) < target_selectable:
+                    row = pending.pop(0)
+                    tested_hosts.add(row["hostname"])
+                    test = run_candidate(
+                        row["hostname"],
+                        row.get("current_ipv4") or [],
+                        attempts=job["limits"]["reality_attempts"],
+                        env=reality_env,
+                        fail_fast=True,
+                    )
+                    reality["candidates"].append(test)
+                    if test.get("dirty"):
+                        reality["status"] = "TARGET_DIRTY_STATE"
+                        status = "TARGET_DIRTY_STATE"
+                        errors.append("TARGET_DIRTY_STATE")
+                        refill_info["stop_reason"] = "TARGET_DIRTY_STATE"
+                        break
+                    if test.get("passed"):
+                        final = dict(row)
+                        final["policy_eligibility"] = row.get("eligibility")
+                        final["benchmark_eligibility"] = "PASS"
+                        final["reality_compatibility"] = "PASS"
+                        final["reality"] = test
+                        final["final"] = "SELECTABLE"
+                        if incumbent_p50 and row.get("p50_ms") is not None and incumbent_p50 > 0:
+                            final["incumbent_p50_improvement_pct"] = round((incumbent_p50 - row["p50_ms"]) / incumbent_p50 * 100.0, 2)
+                        else:
+                            final["incumbent_p50_improvement_pct"] = None
+                        if row.get("p50_ms") is not None and row["p50_ms"] > float(job["profile"]["latency_target_ms"]):
+                            final.setdefault("warnings", []).append("TARGET:P50_ABOVE_GOAL")
+                        final_top.append(final)
+                if status == "TARGET_DIRTY_STATE":
+                    break
                 if len(final_top) >= target_selectable:
+                    refill_info["stop_reason"] = "SELECTABLE_TARGET_MET"
                     break
-                test = run_candidate(
-                    row["hostname"],
-                    row.get("current_ipv4") or [],
-                    attempts=job["limits"]["reality_attempts"],
-                    env=reality_env,
-                    fail_fast=True,
+                if len(reality["candidates"]) >= reality_cap:
+                    refill_info["stop_reason"] = "REALITY_CANDIDATE_CAP_REACHED"
+                    break
+
+                refill_batch = select_deep_refill_batch(
+                    eligible_non_inc_fast,
+                    deep,
+                    job["limits"]["deep_refill_batch"],
+                    job["limits"]["deep_pool_cap"],
                 )
-                reality["candidates"].append(test)
-                if test.get("dirty"):
-                    reality["status"] = "TARGET_DIRTY_STATE"
-                    status = "TARGET_DIRTY_STATE"
-                    errors.append("TARGET_DIRTY_STATE")
+                if not refill_batch:
+                    refill_info["stop_reason"] = (
+                        "DEEP_POOL_CAP_REACHED"
+                        if len(deep) >= int(job["limits"]["deep_pool_cap"])
+                        else "FAST_SURVIVORS_EXHAUSTED"
+                    )
                     break
-                if test.get("passed") and row.get("eligibility") == "ELIGIBLE":
-                    final = dict(row)
-                    final["policy_eligibility"] = row.get("eligibility")
-                    final["benchmark_eligibility"] = "PASS"
-                    final["reality_compatibility"] = "PASS"
-                    final["reality"] = test
-                    final["final"] = "SELECTABLE"
-                    if incumbent_p50 and row.get("p50_ms") is not None and incumbent_p50 > 0:
-                        final["incumbent_p50_improvement_pct"] = round((incumbent_p50 - row["p50_ms"]) / incumbent_p50 * 100.0, 2)
-                    else:
-                        final["incumbent_p50_improvement_pct"] = None
-                    if row.get("p50_ms") is not None and row["p50_ms"] > float(job["profile"]["latency_target_ms"]):
-                        final.setdefault("warnings", []).append("TARGET:P50_ABOVE_GOAL")
-                    final_top.append(final)
+                refill = benchmark_candidates(
+                    refill_batch,
+                    samples=job["limits"]["deep_samples"],
+                    timeout=5.0,
+                    deep=True,
+                    prior_results=fast,
+                )
+                refill = [apply_deep_policy(r, incumbent=False) for r in refill]
+                enrich_deep_asn(refill, target_location, target_ip, metadata)
+                deep.extend(refill)
+                refill_info["refill_rounds"] += 1
+                refill_info["refill_deep_count"] += len(refill)
+
             if status != "TARGET_DIRTY_STATE":
                 reality["status"] = "COMPLETE"
-                if not final_top:
+                final_top.sort(key=deep_rank_key)
+                eligible_deep = [
+                    r for r in deep
+                    if not r.get("incumbent") and r.get("eligibility") == "ELIGIBLE" and not r.get("hard_rejections")
+                ]
+                if not final_top and not eligible_deep:
+                    status = "NO_DEEP_SURVIVORS"
+                elif not final_top:
                     status = "NO_REALITY_SURVIVORS"
                 elif len(final_top) < target_selectable:
                     status = "SUCCESS_PARTIAL_CHOICES"
@@ -1015,6 +1174,13 @@ def run(job: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
                 else:
                     status = "SUCCESS"
 
+    deep.sort(key=deep_rank_key)
+    ranked_survivors = [
+        r for r in deep
+        if not r.get("incumbent") and r.get("eligibility") == "ELIGIBLE" and not r.get("hard_rejections")
+    ]
+    prelim = ranked_survivors[: job["limits"]["top_n"]]
+    reality["adaptive_refill"] = refill_info
     incumbent_assessment = assess_incumbent(
         job["incumbent"],
         next((r for r in eligibility if r.get("incumbent")), None),
@@ -1050,12 +1216,16 @@ def run(job: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
         "review_required": review_required,
         "fast_benchmarked": len(fast),
         "deep_benchmarked": len(deep),
+        "deep_initial_benchmarked": initial_deep_count,
+        "deep_refill_benchmarked": int(refill_info.get("refill_deep_count") or 0),
+        "deep_refill_rounds": int(refill_info.get("refill_rounds") or 0),
         "deep_reused_samples": sum(int(r.get("reused_samples") or 0) for r in deep),
         "deep_new_samples": sum(int(r.get("new_samples") or 0) for r in deep),
         "reality_tested": len(reality.get("candidates") or []),
         "reality_passed": sum(1 for r in reality.get("candidates", []) if r.get("passed")),
         "selectable": len(final_top),
         "selectable_target": int(job["limits"]["selectable_target"]),
+        "adaptive_refill_stop_reason": refill_info.get("stop_reason"),
         "comparison_domains": len({r["hostname"] for r in comparison}),
     }
     rejections = _rejection_rows(eligibility, deep, reality)

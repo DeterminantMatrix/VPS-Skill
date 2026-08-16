@@ -10,6 +10,9 @@ Latency and Reality compatibility cannot rescue a hard policy failure.
 | SNI TLS unreachable on a common IPv4 | `HARD:TLS_UNREACHABLE` |
 | certificate chain/time invalid | `HARD:CERT_INVALID` |
 | certificate identity mismatch | `HARD:CERT_IDENTITY` |
+| target does not negotiate TLS 1.3 on a usable current IPv4 | `HARD:REALITY_MIN_TLS13` |
+| target does not negotiate ALPN h2 on a usable current IPv4 | `HARD:REALITY_MIN_H2` |
+| confirmed cross-site redirect | `HARD:REALITY_CROSS_SITE_REDIRECT` |
 | confirmed shared public CDN/front door | `HARD:KNOWN_PUBLIC_CDN` |
 | confirmed shared managed platform/front door | `HARD:KNOWN_SHARED_PLATFORM` |
 | deep overall TLS success <95% | `HARD:TLS_SUCCESS_LT_95` |
@@ -46,13 +49,18 @@ Rationale: Pantheon documents that every Pantheon site uses its Global CDN and t
 
 ## Soft/review signals
 
-Do not hard reject solely for:
+Do not hard reject solely for 403/405/429/5xx HEAD status, unknown external CNAME/insufficient edge evidence, or bounded metadata-source failure.
 
-- TLS 1.2 instead of TLS 1.3 (`WARN:TLS12_ONLY`);
-- no h2 (`WARN:NO_H2`);
-- 403/405/429/5xx HEAD response;
-- cross-site redirect;
-- unknown external CNAME or insufficient edge evidence;
-- bounded metadata source failure.
+TLS 1.3 and ALPN h2 are protocol-minimum gates, not performance bonuses. A confirmed cross-site redirect is also a hard protocol failure; same-site/root-to-www redirects remain acceptable. If redirect evidence is unavailable, retain unknown/review state rather than inventing a pass.
 
 Use `REVIEW:EDGE_UNKNOWN` for unresolved edge evidence.
+
+## Hard-rejection categories
+
+Keep the reason class explicit in final decision artifacts:
+
+- REALITY protocol: public IPv4/TLS reachability, certificate/identity, TLS1.3, h2, redirect minimum;
+- safety/front-door policy: known public CDN or known shared managed platform;
+- benchmark reliability: overall/per-IP success thresholds.
+
+A protocol failure is not called a CDN/policy failure, even though both prevent `SELECTABLE`.
