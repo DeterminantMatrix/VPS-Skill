@@ -195,11 +195,12 @@ report.md
 
 ## Selection vs repair
 
-Normal invocation is `SELECTION MODE`. Use `--worker-check-only` after an authorized deployment to verify the fixed wrapper path plus protocol/version/manifest without candidate discovery or SNI measurements. If a worker/environment defect is discovered, stop selection and report `REPAIR_REQUIRED`. Enter `MAINTENANCE / REPAIR MODE` only after explicit user authorization. Repair may update/test/deploy the fixed worker, but it must not silently continue the old frozen selection run afterward. Read `references/maintenance.md`.
+Normal invocation is `SELECTION MODE`. If a worker/environment defect is discovered, stop selection and report `REPAIR_REQUIRED`. Enter `MAINTENANCE / REPAIR MODE` only after explicit user authorization. After deployment, verify the wrapper read-only by invoking `/usr/local/bin/reality-sni-target-worker` without `run`: it must return `FIXED_COMMAND_REQUIRED` together with worker identity, protocol/version, and manifest evidence without candidate traffic. Then start a new normal selection run. Read `references/maintenance.md`.
 
 ## Bundled scripts
 
-- `scripts/controller_run.py`: strict local inventory guard, v4.1 QUICK/AUDIT frozen job, worker-manifest verification, one fixed SSH orchestration, artifacts.
+- `scripts/controller_run.py`: resilient v4.1 entrypoint: exact/fuzzy inventory resolution, dedicated run directories, sanitized SSH diagnostics, one fixed worker SSH, and artifacts.
+- `scripts/controller_core.py`: stable v4.1 QUICK/AUDIT profile/job helpers retained separately from runtime error handling.
 - `scripts/target_worker.py`: fixed target-side v4.1 adaptive orchestrator and incumbent assessment.
 - `scripts/target_discovery.py`: bounded target-side regional/passive discovery.
 - `scripts/target_probe.py`: TLS/HEAD/network evidence and public-CDN/shared-platform classification.
