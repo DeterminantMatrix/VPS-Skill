@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from common import (
+    IMPLEMENTATION_VERSION,
     JOB_SCHEMA_VERSION,
     PROFILE_NAME,
     WORKER_PROTOCOL,
@@ -133,6 +134,74 @@ def auto_seed_file(root: Path, region: str | None) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _profile_settings(mode: str) -> tuple[dict[str, int], dict[str, Any]]:
+    if mode == "audit":
+        return (
+            {
+                "source_pool_cap": 1200,
+                "discovered_cap": 600,
+                "eligibility_pool": 120,
+                "fast_pool": 50,
+                "deep_pool": 10,
+                "top_n": 5,
+                "comparison_min_domains": 5,
+                "fast_samples": 5,
+                "deep_samples": 20,
+                "reality_attempts": 5,
+                "reality_candidate_cap": 9,
+                "selectable_target": 5,
+                "ct_base_cap": 40,
+                "ct_max_per_domain": 20,
+                "dns_workers": 12,
+                "ip_metadata_budget": 128,
+            },
+            {
+                "run_mode": "audit",
+                "coverage_goal": 400,
+                "source_stop_target": 1200,
+                "primary_radius_km": 75,
+                "expanded_radius_km": 150,
+                "ct_failure_budget": 3,
+                "latency_target_ms": 60.0,
+                "strict_shared_edge": True,
+                "adaptive_gate": False,
+            },
+        )
+    if mode != "quick":
+        raise ValueError("unsupported profile mode")
+    return (
+        {
+            "source_pool_cap": 400,
+            "discovered_cap": 180,
+            "eligibility_pool": 60,
+            "fast_pool": 30,
+            "deep_pool": 10,
+            "top_n": 5,
+            "comparison_min_domains": 5,
+            "fast_samples": 3,
+            "deep_samples": 20,
+            "reality_attempts": 5,
+            "reality_candidate_cap": 8,
+            "selectable_target": 5,
+            "ct_base_cap": 20,
+            "ct_max_per_domain": 10,
+            "dns_workers": 12,
+            "ip_metadata_budget": 96,
+        },
+        {
+            "run_mode": "quick",
+            "coverage_goal": 150,
+            "source_stop_target": 220,
+            "primary_radius_km": 75,
+            "expanded_radius_km": 150,
+            "ct_failure_budget": 3,
+            "latency_target_ms": 60.0,
+            "strict_shared_edge": True,
+            "adaptive_gate": True,
+        },
+    )
+
+
 def build_job(
     guard: dict[str, Any],
     seeds: list[str],
@@ -140,10 +209,13 @@ def build_job(
     incumbent_mode: str,
     *,
     worker_manifest: str,
+    profile_mode: str = "quick",
 ) -> dict[str, Any]:
+    limits, profile = _profile_settings(profile_mode)
     return {
         "schema_version": JOB_SCHEMA_VERSION,
         "worker_protocol": WORKER_PROTOCOL,
+        "implementation_version": IMPLEMENTATION_VERSION,
         "expected_worker_manifest": worker_manifest,
         "profile_name": PROFILE_NAME,
         "frozen_at": datetime.now(timezone.utc).isoformat(),
@@ -157,30 +229,8 @@ def build_job(
         "incumbent": incumbent,
         "seed_domains": seeds,
         "port": 443,
-        "limits": {
-            "source_pool_cap": 1200,
-            "discovered_cap": 600,
-            "eligibility_pool": 120,
-            "fast_pool": 50,
-            "deep_pool": 10,
-            "top_n": 5,
-            "comparison_min_domains": 5,
-            "fast_samples": 5,
-            "deep_samples": 20,
-            "reality_attempts": 5,
-            "ct_base_cap": 40,
-            "ct_max_per_domain": 20,
-            "dns_workers": 12,
-            "ip_metadata_budget": 128,
-        },
-        "profile": {
-            "coverage_goal": 400,
-            "primary_radius_km": 75,
-            "expanded_radius_km": 150,
-            "ct_failure_budget": 3,
-            "latency_target_ms": 60.0,
-            "strict_shared_edge": True,
-        },
+        "limits": limits,
+        "profile": profile,
     }
 
 
@@ -206,7 +256,7 @@ def run_remote(alias: str, job: dict[str, Any], timeout: int) -> tuple[dict[str,
 
     if isinstance(parsed, dict):
         worker = parsed.get("worker") if isinstance(parsed.get("worker"), dict) else {}
-        if parsed.get("schema_version") != JOB_SCHEMA_VERSION or worker.get("protocol") != WORKER_PROTOCOL:
+        if parsed.get("schema_version") != JOB_SCHEMA_VERSION or worker.get("protocol") != WORKER_PROTOCOL or worker.get("implementation_version") != IMPLEMENTATION_VERSION:
             return None, "TARGET_WORKER_VERSION_MISMATCH"
         if worker.get("manifest") != job.get("expected_worker_manifest"):
             return None, "TARGET_WORKER_BUILD_MISMATCH"
@@ -225,6 +275,7 @@ def main() -> int:
     ap.add_argument("--inventory", type=Path, default=None)
     ap.add_argument("--seed-file", type=Path)
     ap.add_argument("--incumbent", default="auto", help="hostname or 'auto' for target-side read-only discovery")
+    ap.add_argument("--profile", choices=("quick", "audit"), default="quick", help="quick is the default adaptive selection profile; audit restores broad coverage")
     ap.add_argument("--ssh-timeout", type=int, default=2400)
     args = ap.parse_args()
 
@@ -245,7 +296,7 @@ def main() -> int:
             if incumbent not in seeds:
                 seeds.append(incumbent)
         manifest = compute_worker_manifest(root / "scripts")
-        job = build_job(guard, seeds, incumbent, incumbent_mode, worker_manifest=manifest)
+        job = build_job(guard, seeds, incumbent, incumbent_mode, worker_manifest=manifest, profile_mode=args.profile)
     except Exception as exc:
         stage_path.write_text(f"stage\tstatus\tdetail\ninventory_or_input\tFAILED\t{type(exc).__name__}\n", encoding="utf-8")
         atomic_write_json(run_dir / "top5.json", {"status": "BLOCKED", "reason": "INVENTORY_OR_INPUT_FAILED", "top5": [], "comparison": []})
@@ -253,7 +304,7 @@ def main() -> int:
 
     atomic_write_json(run_dir / "frozen-run.json", job)
     with stage_path.open("a", encoding="utf-8") as handle:
-        handle.write("freeze\tOK\tv4 controller profile and expected worker manifest frozen before target evaluation\n")
+        handle.write(f"freeze\tOK\tv4.1 {args.profile} profile and expected worker manifest frozen before target evaluation\n")
 
     result, remote_status = run_remote(guard["alias"], job, max(60, args.ssh_timeout))
     with stage_path.open("a", encoding="utf-8") as handle:
@@ -277,6 +328,7 @@ def main() -> int:
         "deep-benchmark.json": result.get("deep_benchmark", []),
         "reality-results.json": result.get("reality", {}),
         "comparison.json": result.get("comparison", []),
+        "incumbent-assessment.json": result.get("incumbent_assessment", {}),
         "top5.json": {
             "status": result.get("status"),
             "coverage": result.get("coverage", {}),
@@ -302,7 +354,7 @@ def main() -> int:
     with stage_path.open("a", encoding="utf-8") as handle:
         handle.write(f"artifacts\tOK\t{result.get('status', 'UNKNOWN')}\n")
     print(f"TARGET_MEASURED_RUN_STATUS:{result.get('status', 'UNKNOWN')}")
-    ok_status = {"SUCCESS", "SUCCESS_WITH_REVIEW", "PARTIAL_REALITY_UNAVAILABLE", "INVALID_REALITY_CONTROL"}
+    ok_status = {"SUCCESS", "SUCCESS_WITH_REVIEW", "SUCCESS_PARTIAL_CHOICES", "PARTIAL_REALITY_UNAVAILABLE", "INVALID_REALITY_CONTROL"}
     return 0 if result.get("status") in ok_status else 1
 
 
