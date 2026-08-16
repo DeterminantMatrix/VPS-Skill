@@ -1,43 +1,35 @@
 # Benchmark policy
 
-## Fast benchmark
+## Fast stage
 
-- At most 50 candidates, plus incumbent baseline if needed.
-- Five interleaved TCP+TLS samples per candidate.
-- Balance samples across the candidate's common public IPv4 addresses.
-- Record success rate, P50, max, and MAD.
-- Five samples are not enough for a meaningful decisive P95; do not use fast-stage P95 as a hard criterion.
+- At most 50 candidates including the incumbent baseline when available.
+- Exactly 5 interleaved TCP+TLS samples per candidate by default.
+- Balance samples deterministically across current common IPv4s.
+- Use success rate, P50, MAD, and max for coarse ranking.
+- Do not use a five-sample P95 as a decisive statistic.
 
-Retain at most 8-10 for deep benchmark.
+## Deep stage
 
-## Deep benchmark
+- At most 10 candidates including the incumbent baseline.
+- Exactly 20 interleaved samples per candidate by default.
+- Report success rate, P50, P90, P95, max, MAD, and per-IP statistics.
+- Require >=95% overall TLS success for non-incumbents.
+- Require >=90% per-IP success when that IP has at least three samples.
 
-Default to 20 interleaved samples per candidate. Record:
+## Ordering
 
-- success rate
-- P50
-- P90
-- P95
-- max
-- MAD
-- per-IP success and sample count
-- DNS/IP consistency observations
+Use lexicographic ordering:
 
-## Latency goal
+1. policy state: `ELIGIBLE` before `REVIEW_REQUIRED`;
+2. reliability/success rate;
+3. P50;
+4. P95;
+5. MAD;
+6. per-IP consistency;
+7. front-door confidence;
+8. exact target ASN as a late preference;
+9. source/locality evidence.
 
-`latency_target_ms = 60` is an advisory goal. If every otherwise-valid target exceeds it, report the best available candidates rather than returning an artificial empty set.
+The incumbent is guaranteed as a baseline but does not gain policy preference merely because it is incumbent.
 
-## Ranking
-
-Use lexicographic ranking rather than an opaque weighted score:
-
-1. policy eligibility / Reality final eligibility
-2. success rate
-3. target-side P50
-4. target-side P95
-5. MAD/jitter
-6. per-IP consistency
-7. front-door confidence
-8. institutional/locality evidence
-
-The incumbent is a baseline and may remain `BASELINE_ONLY` even if it would not be selectable under current policy.
+`latency_target_ms` is advisory. Return the best evidence even when every candidate is above the target.

@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Fixed target-side worker for target-measured Reality SNI selection.
-
-Install deliberately on an owned VPS and expose it as `reality-sni-target-worker`.
-Normal controller runs invoke only `reality-sni-target-worker run` and pass a frozen
-JSON job on stdin.
-"""
+"""Fixed target-side worker for target-measured Reality SNI selection v4."""
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,12 +12,24 @@ from pathlib import Path
 from typing import Any
 
 from benchmark import apply_deep_policy, benchmark_candidates, deep_rank_key, fast_rank_key
-from common import edge_priority, fetch_bytes, fetch_json, read_json_stdin, source_priority, validate_hostname
+from common import (
+    JOB_SCHEMA_VERSION,
+    PROFILE_NAME,
+    WORKER_PROTOCOL,
+    compute_worker_manifest,
+    edge_priority,
+    fetch_bytes,
+    fetch_json,
+    policy_priority,
+    read_json_stdin,
+    registrable_domain,
+    source_priority,
+    validate_hostname,
+)
 from reality_selftest import environment as reality_environment
-from reality_selftest import find_sing_box
-from reality_selftest import run_candidate
+from reality_selftest import find_sing_box, run_candidate
 from target_discovery import discover
-from target_probe import gate_candidate, resolve_ipv4_observations
+from target_probe import classify_network_organization, gate_candidate, resolve_ipv4_observations
 
 ABSOLUTE_LIMITS = {
     "source_pool_cap": 1200,
@@ -30,22 +38,51 @@ ABSOLUTE_LIMITS = {
     "fast_pool": 50,
     "deep_pool": 10,
     "top_n": 5,
+    "comparison_min_domains": 10,
     "fast_samples": 10,
     "deep_samples": 30,
     "reality_attempts": 5,
     "ct_base_cap": 60,
     "ct_max_per_domain": 30,
     "dns_workers": 16,
+    "ip_metadata_budget": 256,
 }
+
+FIXED_CONFIG_FILES = [
+    Path("/etc/sing-box/config.json"),
+    Path("/etc/sing-box/config.jsonc"),
+    Path("/usr/local/etc/sing-box/config.json"),
+    Path("/usr/local/etc/sing-box/config.jsonc"),
+    Path("/opt/sing-box/config.json"),
+    Path("/opt/sing-box/config.jsonc"),
+]
+FIXED_CONFIG_DIRS = [Path("/etc/sing-box/conf.d"), Path("/etc/sing-box/config.d")]
+HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def worker_identity() -> dict[str, Any]:
+    directory = Path(__file__).resolve().parent
+    return {
+        "protocol": WORKER_PROTOCOL,
+        "manifest": compute_worker_manifest(directory),
+        "profile": PROFILE_NAME,
+    }
 
 
 def validate_job(job: Any) -> dict[str, Any]:
-    if not isinstance(job, dict) or job.get("schema_version") != 3 or job.get("profile_name") != "target-measured-v3":
+    if not isinstance(job, dict):
+        raise ValueError("job must be an object")
+    if job.get("schema_version") != JOB_SCHEMA_VERSION or job.get("profile_name") != PROFILE_NAME:
         raise ValueError("unsupported job schema/profile")
+    if job.get("worker_protocol") != WORKER_PROTOCOL:
+        raise ValueError("unsupported worker protocol")
+    expected = str(job.get("expected_worker_manifest") or "")
+    if not HEX64_RE.fullmatch(expected):
+        raise ValueError("invalid expected worker manifest")
     if job.get("port") != 443:
         raise ValueError("only TCP/443 is permitted")
     target = job.get("target")
-    if not isinstance(target, dict) or not target.get("alias") or not target.get("inventory_ipv4"):
+    if not isinstance(target, dict) or not target.get("inventory_id") or not target.get("alias") or not target.get("inventory_ipv4"):
         raise ValueError("missing target identity")
     incumbent_mode = str(job.get("incumbent_mode") or "explicit")
     if incumbent_mode not in {"explicit", "auto"}:
@@ -69,6 +106,8 @@ def validate_job(job: Any) -> dict[str, Any]:
             raise ValueError(f"invalid/unsafe limit: {key}")
     if limits["reality_attempts"] != 5:
         raise ValueError("Reality attempts are fixed at five")
+    if limits["comparison_min_domains"] < 5:
+        raise ValueError("comparison must target at least five domains")
     profile = job.get("profile")
     if not isinstance(profile, dict):
         raise ValueError("missing profile")
@@ -81,17 +120,9 @@ def validate_job(job: Any) -> dict[str, Any]:
     latency = float(profile.get("latency_target_ms", 0))
     if not (1 <= latency <= 1000):
         raise ValueError("invalid latency target")
+    if profile.get("strict_shared_edge") is not True:
+        raise ValueError("strict shared-edge policy must remain enabled")
     return job
-
-
-AUTO_CONFIG_FILES = [
-    Path("/etc/sing-box/config.json"),
-    Path("/etc/sing-box/config.jsonc"),
-    Path("/usr/local/etc/sing-box/config.json"),
-    Path("/usr/local/etc/sing-box/config.jsonc"),
-    Path("/opt/sing-box/config.json"),
-]
-AUTO_CONFIG_DIRS = [Path("/etc/sing-box/conf.d"), Path("/etc/sing-box/config.d")]
 
 
 def _strip_json_comments(text: str) -> str:
@@ -140,9 +171,7 @@ def _extract_reality_targets(value: Any, found: set[str]) -> None:
             reality = tls.get("reality")
             if isinstance(reality, dict):
                 handshake = reality.get("handshake")
-                candidate = None
-                if isinstance(handshake, dict):
-                    candidate = handshake.get("server")
+                candidate = handshake.get("server") if isinstance(handshake, dict) else None
                 if isinstance(candidate, str):
                     try:
                         found.add(validate_hostname(candidate))
@@ -160,11 +189,93 @@ def _extract_reality_targets(value: Any, found: set[str]) -> None:
             _extract_reality_targets(child, found)
 
 
-def resolve_auto_incumbent() -> tuple[str | None, str | None]:
-    paths = list(AUTO_CONFIG_FILES)
-    for directory in AUTO_CONFIG_DIRS:
-        if directory.is_dir():
-            paths.extend(sorted(list(directory.glob("*.json")) + list(directory.glob("*.jsonc")))[:32])
+def _config_files_from_directory(directory: Path, cap: int = 64) -> list[Path]:
+    if not directory.is_dir():
+        return []
+    return sorted(list(directory.glob("*.json")) + list(directory.glob("*.jsonc")))[:cap]
+
+
+def _parse_sing_box_config_args(argv: list[str], cwd: Path) -> list[Path]:
+    """Resolve only sing-box global -c/-C/-D config arguments without executing shell."""
+    working = cwd
+    for idx, arg in enumerate(argv):
+        if arg in {"-D", "--directory"} and idx + 1 < len(argv):
+            candidate = Path(argv[idx + 1])
+            working = candidate if candidate.is_absolute() else cwd / candidate
+        elif arg.startswith("--directory="):
+            candidate = Path(arg.split("=", 1)[1])
+            working = candidate if candidate.is_absolute() else cwd / candidate
+    paths: list[Path] = []
+    idx = 0
+    while idx < len(argv):
+        arg = argv[idx]
+        value: str | None = None
+        mode: str | None = None
+        if arg in {"-c", "--config"} and idx + 1 < len(argv):
+            value, mode = argv[idx + 1], "file"
+            idx += 1
+        elif arg.startswith("--config="):
+            value, mode = arg.split("=", 1)[1], "file"
+        elif arg in {"-C", "--config-directory"} and idx + 1 < len(argv):
+            value, mode = argv[idx + 1], "dir"
+            idx += 1
+        elif arg.startswith("--config-directory="):
+            value, mode = arg.split("=", 1)[1], "dir"
+        if value:
+            candidate = Path(value)
+            candidate = candidate if candidate.is_absolute() else working / candidate
+            if mode == "file":
+                paths.append(candidate)
+            else:
+                paths.extend(_config_files_from_directory(candidate))
+        idx += 1
+    if not paths:
+        for name in ("config.json", "config.jsonc"):
+            candidate = working / name
+            if candidate.is_file():
+                paths.append(candidate)
+    return paths
+
+
+def _live_sing_box_config_paths(proc_root: Path = Path("/proc")) -> list[Path]:
+    paths: list[Path] = []
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            exe = os.path.realpath(entry / "exe")
+            if os.path.basename(exe) != "sing-box":
+                continue
+            raw = (entry / "cmdline").read_bytes()
+            argv = [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
+            if not argv:
+                continue
+            cwd = Path(os.path.realpath(entry / "cwd"))
+            paths.extend(_parse_sing_box_config_args(argv, cwd))
+        except (OSError, ValueError):
+            continue
+    dedup: list[Path] = []
+    seen = set()
+    for path in paths:
+        real = os.path.realpath(path)
+        if real not in seen:
+            seen.add(real)
+            dedup.append(Path(real))
+    return dedup
+
+
+def _fixed_config_paths() -> list[Path]:
+    paths = list(FIXED_CONFIG_FILES)
+    for directory in FIXED_CONFIG_DIRS:
+        paths.extend(_config_files_from_directory(directory, cap=32))
+    return paths
+
+
+def _resolve_targets_from_paths(paths: list[Path]) -> tuple[set[str], int]:
     found: set[str] = set()
     readable = 0
     for path in paths:
@@ -177,11 +288,22 @@ def resolve_auto_incumbent() -> tuple[str | None, str | None]:
             _extract_reality_targets(data, found)
         except (OSError, UnicodeError, json.JSONDecodeError):
             continue
+    return found, readable
+
+
+def resolve_auto_incumbent(proc_root: Path = Path("/proc")) -> tuple[str | None, str | None, dict[str, Any]]:
+    live_paths = _live_sing_box_config_paths(proc_root)
+    found, readable = _resolve_targets_from_paths(live_paths)
+    source = "LIVE_PROCESS_CONFIG" if readable else "FIXED_CONFIG_FALLBACK"
+    if not readable:
+        fallback_paths = _fixed_config_paths()
+        found, readable = _resolve_targets_from_paths(fallback_paths)
+    info = {"source": source, "readable_config_count": readable, "candidate_count": len(found)}
     if len(found) == 1:
-        return next(iter(found)), None
+        return next(iter(found)), None, info
     if len(found) > 1:
-        return None, "AUTO_INCUMBENT_AMBIGUOUS"
-    return None, "AUTO_INCUMBENT_UNAVAILABLE" if readable else "AUTO_INCUMBENT_CONFIG_UNREADABLE"
+        return None, "AUTO_INCUMBENT_AMBIGUOUS", info
+    return None, "AUTO_INCUMBENT_UNAVAILABLE" if readable else "AUTO_INCUMBENT_CONFIG_UNREADABLE", info
 
 
 def _tool_version(command: str) -> str | None:
@@ -266,49 +388,202 @@ def preflight(job: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+class IPMetadataCache:
+    def __init__(self, budget: int):
+        self.budget = max(0, int(budget))
+        self.used = 0
+        self.cache: dict[str, dict[str, Any] | None] = {}
+        self.errors = 0
+
+    def lookup(self, ip: str) -> dict[str, Any] | None:
+        if ip in self.cache:
+            return self.cache[ip]
+        if self.used >= self.budget:
+            return None
+        self.used += 1
+        try:
+            data = fetch_json(f"https://ipwho.is/{ip}", timeout=6, max_bytes=200_000)
+            if not isinstance(data, dict) or not data.get("success", True):
+                self.cache[ip] = None
+                return None
+            conn = data.get("connection") if isinstance(data.get("connection"), dict) else {}
+            value = {
+                "ip": ip,
+                "asn": conn.get("asn"),
+                "organization": conn.get("org") or conn.get("isp"),
+                "country_code": data.get("country_code"),
+            }
+            self.cache[ip] = value
+            return value
+        except Exception:
+            self.errors += 1
+            self.cache[ip] = None
+            return None
+
+
+def _diversity_facts(rec: dict[str, Any]) -> tuple[str, tuple[str, ...], str]:
+    try:
+        domain = registrable_domain(rec["hostname"])
+    except ValueError:
+        domain = rec["hostname"]
+    ips = tuple(sorted(rec.get("initial_ipv4") or []))
+    organizations = rec.get("organizations") or []
+    organization = str(organizations[0]).strip().lower() if organizations else ""
+    return domain, ips, organization
+
+
 def select_probe_pool(candidates: list[dict[str, Any]], incumbent: str, limit: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    ordered = sorted(candidates, key=lambda r: (0 if r["hostname"] == incumbent else 1, source_priority(r.get("sources") or []), r["hostname"]))
-    selected = []
-    deferred = []
+    ordered = sorted(
+        candidates,
+        key=lambda r: (
+            0 if r["hostname"] == incumbent else 1,
+            source_priority(r.get("sources") or []),
+            float(r.get("distance_km")) if r.get("distance_km") is not None else 1e9,
+            r["hostname"],
+        ),
+    )
+    selected: list[dict[str, Any]] = []
+    remaining: list[dict[str, Any]] = []
+    skipped_for_diversity: set[str] = set()
+    seen_domains: set[str] = set()
+    seen_ipsets: set[tuple[str, ...]] = set()
+    seen_orgs: set[str] = set()
+
     for rec in ordered:
+        if rec["hostname"] == incumbent and len(selected) < limit:
+            item = dict(rec)
+            item["incumbent"] = True
+            item["execution"] = "PROBED"
+            item["selection_pass"] = "INCUMBENT"
+            selected.append(item)
+            domain, ips, org = _diversity_facts(rec)
+            seen_domains.add(domain)
+            if ips:
+                seen_ipsets.add(ips)
+            if org:
+                seen_orgs.add(org)
+        else:
+            remaining.append(rec)
+
+    def admit(pass_name: str, predicate) -> None:
+        nonlocal remaining
+        kept = []
+        for rec in remaining:
+            if len(selected) >= limit:
+                kept.append(rec)
+                continue
+            domain, ips, org = _diversity_facts(rec)
+            if not predicate(domain, ips, org):
+                skipped_for_diversity.add(rec["hostname"])
+                kept.append(rec)
+                continue
+            item = dict(rec)
+            item["incumbent"] = False
+            item["execution"] = "PROBED"
+            item["selection_pass"] = pass_name
+            selected.append(item)
+            seen_domains.add(domain)
+            if ips:
+                seen_ipsets.add(ips)
+            if org:
+                seen_orgs.add(org)
+        remaining = kept
+
+    admit("DIVERSE", lambda d, ips, org: d not in seen_domains and (not ips or ips not in seen_ipsets) and (not org or org not in seen_orgs))
+    admit("RELAXED_DIVERSE", lambda d, ips, org: d not in seen_domains or (ips and ips not in seen_ipsets))
+    admit("FILL", lambda d, ips, org: True)
+
+    deferred = []
+    for rec in remaining:
         item = dict(rec)
         item["incumbent"] = rec["hostname"] == incumbent
-        if len(selected) < limit:
-            item["execution"] = "PROBED"
-            selected.append(item)
+        item["execution"] = "DEFERRED_BUDGET"
+        if rec["hostname"] in skipped_for_diversity:
+            item["status_code"] = "DEFERRED:DIVERSITY_BUDGET"
         else:
-            item["execution"] = "DEFERRED_BUDGET"
             item["status_code"] = "DEFERRED:PROBE_BUDGET"
-            deferred.append(item)
+        deferred.append(item)
     return selected, deferred
 
 
 def gate_selection_key(row: dict[str, Any]) -> tuple[Any, ...]:
     successful = [r for r in row.get("tls", []) if r.get("success") and r.get("elapsed_ms") is not None]
-    p50_like = sorted(float(r["elapsed_ms"]) for r in successful)
-    coarse = p50_like[len(p50_like) // 2] if p50_like else 1e9
+    values = sorted(float(r["elapsed_ms"]) for r in successful)
+    coarse = values[len(values) // 2] if values else 1e9
     front = (row.get("front_door") or {}).get("class", "UNKNOWN")
-    return (0 if row.get("incumbent") else 1, 0 if not row.get("hard_rejections") else 1,
-            edge_priority(front), float(coarse), source_priority(row.get("sources") or []), row["hostname"])
+    return (
+        policy_priority(row.get("eligibility")),
+        edge_priority(front),
+        float(coarse),
+        source_priority(row.get("sources") or []),
+        row["hostname"],
+    )
 
 
-def _candidate_asn(ip: str) -> dict[str, Any] | None:
-    try:
-        data = fetch_json(f"https://ipwho.is/{ip}", timeout=6, max_bytes=200_000)
-        if not isinstance(data, dict) or not data.get("success", True):
-            return None
-        conn = data.get("connection") if isinstance(data.get("connection"), dict) else {}
-        return {"ip": ip, "asn": conn.get("asn"), "organization": conn.get("org") or conn.get("isp")}
-    except Exception:
-        return None
-
-
-def enrich_deep_asn(rows: list[dict[str, Any]], target_asn: Any) -> None:
+def enrich_deep_asn(rows: list[dict[str, Any]], target_asn: Any, metadata: IPMetadataCache) -> None:
     for row in rows:
         ips = row.get("current_ipv4") or []
-        evidence = _candidate_asn(ips[0]) if ips else None
+        evidence = metadata.lookup(ips[0]) if ips else None
         row["asn_evidence"] = evidence
         row["exact_target_asn"] = bool(evidence and target_asn and str(evidence.get("asn")) == str(target_asn))
+        network_class, network_name, network_evidence = classify_network_organization(evidence)
+        if row.get("incumbent"):
+            continue
+        if network_class == "SHARED_PLATFORM_CONFIRMED":
+            row.setdefault("hard_rejections", []).append("HARD:KNOWN_SHARED_PLATFORM")
+            row["hard_rejections"] = sorted(set(row["hard_rejections"]))
+            row["eligibility"] = "HARD_REJECTED"
+            row["front_door"] = {
+                **(row.get("front_door") or {}),
+                "class": network_class,
+                "platform": network_name,
+                "provider": None,
+                "evidence": sorted(set((row.get("front_door") or {}).get("evidence", []) + ([network_evidence] if network_evidence else []))),
+            }
+        elif network_class == "PUBLIC_CDN_CONFIRMED":
+            row.setdefault("hard_rejections", []).append("HARD:KNOWN_PUBLIC_CDN")
+            row["hard_rejections"] = sorted(set(row["hard_rejections"]))
+            row["eligibility"] = "HARD_REJECTED"
+            row["front_door"] = {
+                **(row.get("front_door") or {}),
+                "class": network_class,
+                "provider": network_name,
+                "platform": None,
+                "evidence": sorted(set((row.get("front_door") or {}).get("evidence", []) + ([network_evidence] if network_evidence else []))),
+            }
+
+
+def _run_reality_control(hostname: str, ips: list[str], env: dict[str, Any]) -> dict[str, Any]:
+    first = run_candidate(hostname, ips, attempts=1, env=env)
+    first["retried"] = False
+    if first.get("passed") or first.get("dirty"):
+        return first
+    retry = run_candidate(hostname, ips, attempts=2, env=env)
+    rows = list(first.get("attempts") or []) + list(retry.get("attempts") or [])
+    for idx, row in enumerate(rows, 1):
+        row["attempt"] = idx
+    successes = sum(1 for r in rows if r.get("transport_success"))
+    cleanups = sum(1 for r in rows if r.get("cleanup_success"))
+    dirty = any(not r.get("cleanup_success") for r in rows)
+    passed = len(rows) == 3 and successes >= 2 and cleanups == 3 and not dirty
+    failures: dict[str, int] = {}
+    for row in rows:
+        stage = row.get("failure_stage")
+        if stage:
+            failures[str(stage)] = failures.get(str(stage), 0) + 1
+    return {
+        "hostname": hostname,
+        "attempts": rows,
+        "attempt_count": len(rows),
+        "transport_successes": successes,
+        "cleanup_successes": cleanups,
+        "passed": passed,
+        "dirty": dirty,
+        "retried": True,
+        "code": "OK" if passed else "TARGET_DIRTY_STATE" if dirty else "HARD:REALITY_CONTROL_FAILED",
+        "failure_counts": failures,
+        "dominant_failure_stage": max(failures, key=failures.get) if failures else None,
+    }
 
 
 def _rejection_rows(eligibility: list[dict[str, Any]], deep: list[dict[str, Any]], reality: dict[str, Any]) -> list[dict[str, Any]]:
@@ -335,61 +610,169 @@ def _rejection_rows(eligibility: list[dict[str, Any]], deep: list[dict[str, Any]
     return rows
 
 
-def run(job: dict[str, Any]) -> dict[str, Any]:
+def _recommendation_state(row: dict[str, Any], reality_by_host: dict[str, dict[str, Any]]) -> tuple[int, str, str]:
+    if row.get("incumbent"):
+        return 3, "BASELINE", "BASELINE"
+    if row.get("hard_rejections"):
+        return 6, "EXCLUDED", "POLICY_REJECTED"
+    test = reality_by_host.get(row["hostname"])
+    if test and test.get("passed"):
+        if row.get("eligibility") == "ELIGIBLE":
+            return 0, "HIGH", "SELECTABLE"
+        return 1, "CAUTION", "REVIEW_REQUIRED"
+    if test and not test.get("passed"):
+        return 5, "NO", "REALITY_FAILED"
+    if row.get("eligibility") == "ELIGIBLE":
+        return 2, "PENDING", "NOT_REALITY_TESTED"
+    if row.get("eligibility") == "REVIEW_REQUIRED":
+        return 4, "LOW", "REVIEW_NOT_REALITY_TESTED"
+    return 7, "NO", "RANKED_OUT"
+
+
+def build_comparison(
+    deep: list[dict[str, Any]],
+    fast: list[dict[str, Any]],
+    reality: dict[str, Any],
+    incumbent: str,
+    minimum: int,
+    incumbent_p50: float | None,
+) -> list[dict[str, Any]]:
+    reality_by_host = {r.get("hostname"): r for r in reality.get("candidates", []) if r.get("hostname")}
+    rows_by_host: dict[str, dict[str, Any]] = {}
+    for stage, items in (("DEEP", deep), ("FAST_ONLY", fast)):
+        for source in items:
+            if source["hostname"] in rows_by_host:
+                continue
+            row = dict(source)
+            row["benchmark_stage"] = stage
+            rows_by_host[row["hostname"]] = row
+    scored = []
+    for row in rows_by_host.values():
+        group, level, final_state = _recommendation_state(row, reality_by_host)
+        test = reality_by_host.get(row["hostname"])
+        row["reality_compatibility"] = "PASS" if test and test.get("passed") else "FAIL" if test else "NOT_TESTED"
+        row["reality_summary"] = test
+        row["policy_eligibility"] = row.get("eligibility")
+        row["final_state"] = final_state
+        row["recommendation"] = level
+        row["recommendation_group"] = group
+        if incumbent_p50 and row.get("p50_ms") is not None and incumbent_p50 > 0:
+            row["incumbent_p50_improvement_pct"] = round((incumbent_p50 - float(row["p50_ms"])) / incumbent_p50 * 100.0, 2)
+        else:
+            row["incumbent_p50_improvement_pct"] = None
+        scored.append(row)
+    scored.sort(key=lambda r: (
+        r["recommendation_group"],
+        -float(r.get("success_rate") or 0.0),
+        float(r.get("p50_ms")) if r.get("p50_ms") is not None else 1e9,
+        float(r.get("p95_ms")) if r.get("p95_ms") is not None else 1e9,
+        r["hostname"],
+    ))
+    desired = max(5, int(minimum))
+    chosen = scored[:desired]
+    incumbent_row = next((r for r in scored if r["hostname"] == incumbent), None)
+    if incumbent_row and all(r["hostname"] != incumbent for r in chosen):
+        chosen.append(incumbent_row)
+    for rank, row in enumerate(chosen, 1):
+        row["recommendation_rank"] = rank
+    return chosen
+
+
+def _empty_result(job: dict[str, Any], identity: dict[str, Any], status: str, *, preflight_data: dict[str, Any] | None = None, warnings: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "worker": identity,
+        "status": status,
+        "frozen_run": job,
+        "preflight": preflight_data or {},
+        "coverage": {},
+        "regional_candidates": {},
+        "candidates": [],
+        "probe_pool": [],
+        "eligibility": [],
+        "fast_benchmark": [],
+        "deep_benchmark": [],
+        "reality": {},
+        "preliminary_top5": [],
+        "top5": [],
+        "comparison": [],
+        "rejections": [],
+        "warnings": warnings or [],
+        "errors": [status],
+        "counts": {},
+    }
+
+
+def run(job: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
     pre = preflight(job)
     warnings = list(pre.get("warnings") or [])
     errors: list[str] = []
+
     if job.get("incumbent_mode") == "auto":
-        resolved, incumbent_error = resolve_auto_incumbent()
+        resolved, incumbent_error, incumbent_info = resolve_auto_incumbent()
         if incumbent_error:
-            return {
-                "schema_version": 3, "status": incumbent_error, "frozen_run": job, "preflight": pre,
-                "regional_candidates": {}, "candidates": [], "probe_pool": [], "eligibility": [], "fast_benchmark": [],
-                "deep_benchmark": [], "reality": {}, "preliminary_top5": [], "top5": [], "rejections": [],
-                "warnings": warnings, "errors": [incumbent_error], "counts": {},
-            }
+            result = _empty_result(job, identity, incumbent_error, preflight_data=pre, warnings=warnings)
+            result["incumbent_resolution"] = incumbent_info
+            return result
         job = dict(job)
         job["incumbent"] = resolved
-        job["resolved_incumbent_at"] = pre.get("observed_egress_ip") and "before_candidate_evaluation"
+        job["incumbent_resolution"] = incumbent_info
+        job["resolved_incumbent_at"] = "before_candidate_evaluation"
         if resolved not in job["seed_domains"]:
             job["seed_domains"] = list(job["seed_domains"]) + [resolved]
+
     if not pre.get("observed_egress_ip"):
-        return {
-            "schema_version": 3, "status": "TARGET_EGRESS_UNAVAILABLE", "frozen_run": job, "preflight": pre,
-            "regional_candidates": {}, "candidates": [], "probe_pool": [], "eligibility": [], "fast_benchmark": [],
-            "deep_benchmark": [], "reality": {}, "preliminary_top5": [], "top5": [], "rejections": [],
-            "warnings": warnings, "errors": ["TARGET_EGRESS_UNAVAILABLE"], "counts": {},
-        }
+        return _empty_result(job, identity, "TARGET_EGRESS_UNAVAILABLE", preflight_data=pre, warnings=warnings)
 
     discovery = discover(job, pre)
     warnings.extend(discovery.get("errors") or [])
     candidates = discovery["validated"]
+    coverage_status = discovery.get("coverage") or "SPARSE"
+    coverage = {
+        "goal": int(job["profile"]["coverage_goal"]),
+        "validated": len(candidates),
+        "status": coverage_status,
+        "selection_maturity": "MATURE" if coverage_status == "GOOD" else "PROVISIONAL",
+        "source_errors": discovery.get("errors") or [],
+    }
+    if coverage_status != "GOOD":
+        warnings.append(f"COVERAGE_{coverage_status}")
+
     pool, deferred = select_probe_pool(candidates, job["incumbent"], job["limits"]["eligibility_pool"])
+    metadata = IPMetadataCache(job["limits"]["ip_metadata_budget"])
 
     eligibility = []
     for candidate in pool:
-        row = gate_candidate(candidate, dns_observations=2, tls_samples_per_ip=2, timeout=5.0)
+        row = gate_candidate(candidate, dns_observations=2, tls_samples_per_ip=2, timeout=5.0, ip_metadata_lookup=metadata.lookup)
         if row.get("incumbent") and row.get("hard_rejections"):
             row["eligibility"] = "BASELINE_ONLY"
         eligibility.append(row)
+    if metadata.used >= metadata.budget:
+        warnings.append("IP_METADATA_BUDGET_EXHAUSTED")
+    if metadata.errors:
+        warnings.append("IP_METADATA_PARTIAL_FAILURE")
 
     benchmarkable = [r for r in eligibility if not r.get("hard_rejections") or r.get("incumbent")]
     benchmarkable.sort(key=gate_selection_key)
-    fast_input = benchmarkable[: job["limits"]["fast_pool"]]
+    incumbent_gate = next((r for r in benchmarkable if r.get("incumbent")), None)
+    non_inc_gate = [r for r in benchmarkable if not r.get("incumbent")]
+    fast_input = []
+    if incumbent_gate:
+        fast_input.append(incumbent_gate)
+    fast_input.extend(non_inc_gate[: max(0, job["limits"]["fast_pool"] - len(fast_input))])
     fast = benchmark_candidates(fast_input, samples=job["limits"]["fast_samples"], timeout=5.0, deep=False)
     fast.sort(key=fast_rank_key)
 
     incumbent_fast = next((r for r in fast if r.get("incumbent")), None)
-    non_inc = [r for r in fast if not r.get("incumbent")]
+    non_inc_fast = [r for r in fast if not r.get("incumbent")]
     deep_seed = []
     if incumbent_fast:
         deep_seed.append(incumbent_fast)
-    deep_seed.extend(non_inc[: max(0, job["limits"]["deep_pool"] - len(deep_seed))])
-
+    deep_seed.extend(non_inc_fast[: max(0, job["limits"]["deep_pool"] - len(deep_seed))])
     deep = benchmark_candidates(deep_seed, samples=job["limits"]["deep_samples"], timeout=5.0, deep=True)
     deep = [apply_deep_policy(r, incumbent=bool(r.get("incumbent"))) for r in deep]
     target_asn = (pre.get("location") or {}).get("asn")
-    enrich_deep_asn(deep, target_asn)
+    enrich_deep_asn(deep, target_asn, metadata)
     deep.sort(key=deep_rank_key)
 
     prelim = [r for r in deep if not r.get("incumbent") and not r.get("hard_rejections")]
@@ -399,6 +782,8 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
     reality: dict[str, Any] = {"environment": reality_env, "status": "NOT_RUN", "control": None, "candidates": []}
     final_top: list[dict[str, Any]] = []
     status = "SUCCESS"
+    incumbent_deep = next((r for r in deep if r.get("incumbent")), None)
+    incumbent_p50 = incumbent_deep.get("p50_ms") if incumbent_deep else None
 
     if not prelim:
         reality["status"] = "NOT_RUN_NO_DEEP_SURVIVORS"
@@ -408,19 +793,19 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
         warnings.append(f"REALITY_UNAVAILABLE:{reality_env.get('reason')}")
         status = "PARTIAL_REALITY_UNAVAILABLE"
     else:
-        incumbent_gate = next((r for r in eligibility if r["hostname"] == job["incumbent"]), None)
-        incumbent_ips = (incumbent_gate or {}).get("current_ipv4") or (incumbent_gate or {}).get("initial_ipv4") or []
+        incumbent_gate_any = next((r for r in eligibility if r["hostname"] == job["incumbent"]), None)
+        incumbent_ips = (incumbent_gate_any or {}).get("current_ipv4") or (incumbent_gate_any or {}).get("initial_ipv4") or []
         if not incumbent_ips:
             incumbent_ips = resolve_ipv4_observations(job["incumbent"], observations=2).get("common_ipv4") or []
-        control = run_candidate(job["incumbent"], incumbent_ips, attempts=1, env=reality_env)
+        control = _run_reality_control(job["incumbent"], incumbent_ips, reality_env)
         reality["control"] = control
+        if control.get("retried") and control.get("passed"):
+            warnings.append("WARN:REALITY_CONTROL_TRANSIENT_FAILURE")
         if not control.get("passed"):
             reality["status"] = "INVALID:REALITY_CONTROL_FAILED"
             status = "INVALID_REALITY_CONTROL"
         else:
             reality["status"] = "RUNNING"
-            incumbent_deep = next((r for r in deep if r.get("incumbent")), None)
-            incumbent_p50 = incumbent_deep.get("p50_ms") if incumbent_deep else None
             for row in prelim:
                 test = run_candidate(row["hostname"], row.get("current_ipv4") or [], attempts=job["limits"]["reality_attempts"], env=reality_env)
                 reality["candidates"].append(test)
@@ -431,8 +816,11 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
                     break
                 if test.get("passed"):
                     final = dict(row)
+                    final["policy_eligibility"] = row.get("eligibility")
+                    final["benchmark_eligibility"] = "PASS"
+                    final["reality_compatibility"] = "PASS"
                     final["reality"] = test
-                    final["final"] = "REVIEW_REQUIRED" if row.get("eligibility") == "REVIEW_REQUIRED" else "SELECTABLE"
+                    final["final"] = "SELECTABLE" if row.get("eligibility") == "ELIGIBLE" else "REVIEW_REQUIRED"
                     if incumbent_p50 and row.get("p50_ms") is not None and incumbent_p50 > 0:
                         final["incumbent_p50_improvement_pct"] = round((incumbent_p50 - row["p50_ms"]) / incumbent_p50 * 100.0, 2)
                     else:
@@ -442,31 +830,56 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
                     final_top.append(final)
             if status != "TARGET_DIRTY_STATE":
                 reality["status"] = "COMPLETE"
+                selectable_count = sum(1 for r in final_top if r.get("final") == "SELECTABLE")
                 if not final_top:
                     status = "NO_REALITY_SURVIVORS"
-                elif any(r.get("final") == "REVIEW_REQUIRED" for r in final_top):
+                elif selectable_count == 0 or any(r.get("final") == "REVIEW_REQUIRED" for r in final_top):
                     status = "SUCCESS_WITH_REVIEW"
+
+    comparison = build_comparison(
+        deep,
+        fast,
+        reality,
+        job["incumbent"],
+        job["limits"]["comparison_min_domains"],
+        incumbent_p50,
+    )
+    if len({r["hostname"] for r in comparison}) < 5:
+        warnings.append("INSUFFICIENT_COMPARISON_DOMAINS")
 
     hard_rejected = sum(1 for r in eligibility if r.get("hard_rejections") and not r.get("incumbent"))
     review_required = sum(1 for r in eligibility if not r.get("hard_rejections") and r.get("review"))
+    eligible_count = sum(1 for r in eligibility if r.get("eligibility") == "ELIGIBLE")
+    deferred_diversity = sum(1 for r in deferred if r.get("status_code") == "DEFERRED:DIVERSITY_BUDGET")
     counts = {
         "discovered": len(candidates),
         "eligibility_selected": len(pool),
         "deferred_budget": len(deferred),
+        "deferred_diversity": deferred_diversity,
+        "eligible": eligible_count,
         "hard_rejected": hard_rejected,
         "review_required": review_required,
         "fast_benchmarked": len(fast),
         "deep_benchmarked": len(deep),
         "reality_tested": len(reality.get("candidates") or []),
+        "reality_passed": sum(1 for r in reality.get("candidates", []) if r.get("passed")),
         "selectable": sum(1 for r in final_top if r.get("final") == "SELECTABLE"),
+        "comparison_domains": len({r["hostname"] for r in comparison}),
     }
     rejections = _rejection_rows(eligibility, deep, reality)
     return {
-        "schema_version": 3,
+        "schema_version": JOB_SCHEMA_VERSION,
+        "worker": identity,
         "status": status,
         "frozen_run": job,
         "preflight": pre,
-        "regional_candidates": {"coverage": discovery.get("coverage"), "counts": discovery.get("counts"), "errors": discovery.get("errors"), "source_records": discovery.get("source_records")},
+        "coverage": coverage,
+        "regional_candidates": {
+            "coverage": discovery.get("coverage"),
+            "counts": discovery.get("counts"),
+            "errors": discovery.get("errors"),
+            "source_records": discovery.get("source_records"),
+        },
         "candidates": candidates,
         "probe_pool": pool + deferred,
         "eligibility": eligibility,
@@ -475,6 +888,7 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
         "reality": reality,
         "preliminary_top5": prelim,
         "top5": final_top[: job["limits"]["top_n"]],
+        "comparison": comparison,
         "rejections": rejections,
         "warnings": sorted(set(warnings)),
         "errors": sorted(set(errors)),
@@ -483,17 +897,30 @@ def run(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> int:
+    identity = worker_identity()
     if sys.argv[1:] != ["run"]:
-        print(json.dumps({"status": "BLOCKED", "reason": "FIXED_COMMAND_REQUIRED"}))
+        print(json.dumps({"schema_version": JOB_SCHEMA_VERSION, "worker": identity, "status": "BLOCKED", "reason": "FIXED_COMMAND_REQUIRED"}))
         return 2
     try:
         job = validate_job(read_json_stdin())
-        result = run(job)
+        if identity["manifest"] != job["expected_worker_manifest"]:
+            result = _empty_result(job, identity, "TARGET_WORKER_BUILD_MISMATCH")
+        else:
+            result = run(job, identity)
     except Exception as exc:
-        result = {"schema_version": 3, "status": "WORKER_FAILED", "reason": type(exc).__name__, "top5": [], "preliminary_top5": []}
+        result = {
+            "schema_version": JOB_SCHEMA_VERSION,
+            "worker": identity,
+            "status": "WORKER_FAILED",
+            "reason": type(exc).__name__,
+            "top5": [],
+            "preliminary_top5": [],
+            "comparison": [],
+        }
     sys.stdout.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
     sys.stdout.write("\n")
-    return 0 if result.get("status") not in {"WORKER_FAILED", "TARGET_DIRTY_STATE", "TARGET_EGRESS_UNAVAILABLE"} else 1
+    bad = {"WORKER_FAILED", "TARGET_WORKER_BUILD_MISMATCH", "TARGET_DIRTY_STATE", "TARGET_EGRESS_UNAVAILABLE"}
+    return 0 if result.get("status") not in bad else 1
 
 
 if __name__ == "__main__":

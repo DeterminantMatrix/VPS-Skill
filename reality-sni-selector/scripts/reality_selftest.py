@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -19,16 +20,13 @@ from common import is_public_ipv4, validate_hostname
 
 KEY_RE = re.compile(r"(?i)\b(private|public)(?:\s*key)?\s*[:=]\s*([A-Za-z0-9_-]{20,})")
 
-# Some supported sing-box installers expose a management shell script at
-# /usr/local/bin/sing-box and keep the actual ELF in a fixed installation
-# directory.  Keep this list deliberately closed; do not search arbitrary
-# paths or follow user-controlled command input.
-SING_BOX_FALLBACKS = (
+# Prefer deterministic, reviewed installation paths. PATH is fallback only.
+SING_BOX_FIXED_PATHS = (
     "/etc/sing-box/bin/sing-box",
+    "/usr/bin/sing-box",
     "/usr/local/lib/sing-box/sing-box",
     "/opt/sing-box/bin/sing-box",
     "/opt/sing-box/sing-box",
-    "/usr/bin/sing-box",
 )
 
 
@@ -44,12 +42,10 @@ def _is_executable_elf(path: str) -> bool:
 
 
 def find_sing_box() -> str | None:
-    """Return a trusted local sing-box ELF, tolerating a fixed shell wrapper."""
-    candidates: list[str] = []
+    candidates = list(SING_BOX_FIXED_PATHS)
     discovered = shutil.which("sing-box")
     if discovered:
         candidates.append(discovered)
-    candidates.extend(SING_BOX_FALLBACKS)
     seen: set[str] = set()
     for candidate in candidates:
         real = os.path.realpath(candidate)
@@ -196,10 +192,10 @@ def _stop_process(proc: subprocess.Popen[bytes] | None) -> bool:
 def run_attempt(hostname: str, ip: str, env: dict[str, Any] | None = None) -> dict[str, Any]:
     hostname = validate_hostname(hostname)
     if not is_public_ipv4(ip):
-        return {"transport_success": False, "cleanup_success": True, "code": "ERROR:INVALID_REALITY_IPV4", "http_status": None, "elapsed_ms": None}
+        return {"transport_success": False, "cleanup_success": True, "code": "ERROR:INVALID_REALITY_IPV4", "failure_stage": "INPUT", "http_status": None, "elapsed_ms": None, "curl_exit_code": None}
     env = env or environment()
     if not env.get("ready"):
-        return {"transport_success": False, "cleanup_success": True, "code": f"ERROR:{env.get('reason') or 'REALITY_ENV_UNAVAILABLE'}", "http_status": None, "elapsed_ms": None}
+        return {"transport_success": False, "cleanup_success": True, "code": f"ERROR:{env.get('reason') or 'REALITY_ENV_UNAVAILABLE'}", "failure_stage": "ENVIRONMENT", "http_status": None, "elapsed_ms": None, "curl_exit_code": None}
     binary = str(env["sing_box"])
     curl = str(env["curl"])
     tmp = Path(tempfile.mkdtemp(prefix="reality-sni-test-"))
@@ -210,8 +206,17 @@ def run_attempt(hostname: str, ip: str, env: dict[str, Any] | None = None) -> di
     socks_port = _free_port()
     while socks_port == server_port:
         socks_port = _free_port()
-    result = {"transport_success": False, "cleanup_success": False, "code": "ERROR:REALITY_UNKNOWN", "http_status": None, "elapsed_ms": None,
-              "server_port": server_port, "socks_port": socks_port}
+    result = {
+        "transport_success": False,
+        "cleanup_success": False,
+        "code": "ERROR:REALITY_UNKNOWN",
+        "failure_stage": "UNKNOWN",
+        "http_status": None,
+        "elapsed_ms": None,
+        "curl_exit_code": None,
+        "server_port": server_port,
+        "socks_port": socks_port,
+    }
     try:
         private_key, public_key = _keypair(binary)
         user_uuid = str(uuid.uuid4())
@@ -223,14 +228,17 @@ def run_attempt(hostname: str, ip: str, env: dict[str, Any] | None = None) -> di
         _write_secret_json(client_path, client_cfg)
         if not _check(binary, server_path) or not _check(binary, client_path):
             result["code"] = "ERROR:REALITY_CONFIG_INVALID"
+            result["failure_stage"] = "CONFIG_CHECK"
             return result
         server_proc = subprocess.Popen([binary, "run", "-c", str(server_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         if not _wait_port(server_port, server_proc):
             result["code"] = "ERROR:REALITY_SERVER_START"
+            result["failure_stage"] = "SERVER_START"
             return result
         client_proc = subprocess.Popen([binary, "run", "-c", str(client_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         if not _wait_port(socks_port, client_proc):
             result["code"] = "ERROR:REALITY_CLIENT_START"
+            result["failure_stage"] = "CLIENT_START"
             return result
         start = time.perf_counter()
         proc = subprocess.run([
@@ -245,11 +253,22 @@ def run_attempt(hostname: str, ip: str, env: dict[str, Any] | None = None) -> di
             status = int(parts[0])
         result["http_status"] = status
         result["elapsed_ms"] = round(elapsed_ms, 3)
+        result["curl_exit_code"] = int(proc.returncode)
         result["transport_success"] = proc.returncode == 0 and status not in (None, 0)
-        result["code"] = "OK" if result["transport_success"] else "HARD:REALITY_FAILED"
+        if result["transport_success"]:
+            result["code"] = "OK"
+            result["failure_stage"] = None
+        else:
+            result["code"] = "ERROR:REALITY_PROXY_HEAD_TRANSPORT"
+            result["failure_stage"] = "PROXY_HEAD"
+        return result
+    except subprocess.TimeoutExpired:
+        result["code"] = "ERROR:REALITY_TIMEOUT"
+        result["failure_stage"] = "PROXY_HEAD"
         return result
     except Exception as exc:
         result["code"] = f"ERROR:REALITY_{type(exc).__name__.upper()}"
+        result["failure_stage"] = "INTERNAL"
         return result
     finally:
         client_ok = _stop_process(client_proc)
@@ -264,13 +283,24 @@ def run_attempt(hostname: str, ip: str, env: dict[str, Any] | None = None) -> di
         result["cleanup_success"] = bool(client_ok and server_ok and ports_closed and files_removed)
         if not result["cleanup_success"]:
             result["code"] = "TARGET_DIRTY_STATE"
+            result["failure_stage"] = "CLEANUP"
 
 
 def run_candidate(hostname: str, ips: list[str], attempts: int = 5, env: dict[str, Any] | None = None) -> dict[str, Any]:
     usable = [ip for ip in ips if is_public_ipv4(ip)]
     if not usable:
-        return {"hostname": hostname, "attempts": [], "transport_successes": 0, "cleanup_successes": 0, "passed": False, "dirty": False,
-                "code": "ERROR:INVALID_REALITY_IPV4"}
+        return {
+            "hostname": hostname,
+            "attempts": [],
+            "attempt_count": 0,
+            "transport_successes": 0,
+            "cleanup_successes": 0,
+            "passed": False,
+            "dirty": False,
+            "code": "ERROR:INVALID_REALITY_IPV4",
+            "failure_counts": {"INPUT": 1},
+            "dominant_failure_stage": "INPUT",
+        }
     env = env or environment()
     rows = []
     dirty = False
@@ -285,5 +315,18 @@ def run_candidate(hostname: str, ips: list[str], attempts: int = 5, env: dict[st
     successes = sum(1 for r in rows if r.get("transport_success"))
     cleanups = sum(1 for r in rows if r.get("cleanup_success"))
     passed = len(rows) == attempts and successes == attempts and cleanups == attempts and not dirty
+    failure_counter = Counter(str(r.get("failure_stage")) for r in rows if r.get("failure_stage"))
+    dominant = failure_counter.most_common(1)[0][0] if failure_counter else None
     code = "OK" if passed else "TARGET_DIRTY_STATE" if dirty else "HARD:REALITY_FAILED"
-    return {"hostname": hostname, "attempts": rows, "transport_successes": successes, "cleanup_successes": cleanups, "passed": passed, "dirty": dirty, "code": code}
+    return {
+        "hostname": hostname,
+        "attempts": rows,
+        "attempt_count": len(rows),
+        "transport_successes": successes,
+        "cleanup_successes": cleanups,
+        "passed": passed,
+        "dirty": dirty,
+        "code": code,
+        "failure_counts": dict(sorted(failure_counter.items())),
+        "dominant_failure_stage": dominant,
+    }

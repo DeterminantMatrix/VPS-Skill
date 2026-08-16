@@ -1,51 +1,57 @@
-# Local sing-box Reality integration test
+# LOCAL_REALITY_INTEGRATION_TEST
 
-## Purpose
+This stage validates the local sing-box server/client fixture on the target VPS. It is not an end-to-end test from a real remote client.
 
-Prove that the candidate works through the actual sing-box Reality implementation on the target VPS. OpenSSL/Python TLS alone is not sufficient.
+## Binary selection
 
-This is a **local integration test**, not a test of a real remote client path to the VPS.
+Prefer reviewed fixed ELF paths before PATH:
 
-## Isolation
+```text
+/etc/sing-box/bin/sing-box
+/usr/bin/sing-box
+/usr/local/lib/sing-box/sing-box
+/opt/sing-box/bin/sing-box
+/opt/sing-box/sing-box
+```
 
-- Use the real sing-box ELF binary on the target.
-- Never edit or restart production sing-box.
-- Bind server and SOCKS listeners to `127.0.0.1` only.
-- Use ephemeral/high ports.
-- Use a unique 0700 temporary directory per attempt.
-- Store temporary JSON as 0600.
-- Generate fresh test-only Reality keys, UUID, and short ID.
-- Start temporary processes in their own process groups.
-- Remove all processes and files after every attempt, including failures.
+Accept a candidate only when it is a regular executable file with ELF magic. PATH is fallback only. Do not execute shell wrappers as the Reality test binary.
 
-## Candidate binding
+## Incumbent control
 
-Keep the candidate hostname as the Reality client `server_name` and temporary inbound TLS `server_name`.
+- Run one attempt first.
+- If it succeeds, continue immediately.
+- If it fails but cleanup is clean, run two additional diagnostic attempts.
+- A retried control requires at least 2/3 total transport successes and 3/3 cleanups.
+- A successful retried control emits `WARN:REALITY_CONTROL_TRANSIENT_FAILURE`.
+- Cleanup failure immediately invalidates the batch.
 
-Resolve the candidate to a validated public IPv4 before the fixture and use that IPv4 as the temporary Reality handshake address. This avoids legacy `domain_strategy` and preserves the hostname SNI separately.
+## Candidate test
 
-## Fixed sequence
+For each of at most five finalists:
 
-For each attempt:
+- exactly 5 sequential attempts;
+- fresh Reality keypair, UUID, and short ID per attempt;
+- server and client listeners on `127.0.0.1` ephemeral/high ports;
+- candidate hostname remains TLS/Reality `server_name`;
+- selected candidate IPv4 is the Reality handshake server;
+- validate both configs with `sing-box check`;
+- perform one short HTTPS HEAD through loopback SOCKS;
+- treat any HTTP status reached over successful transport separately from HTTP health;
+- terminate process groups, verify ports closed, and remove 0700/0600 temporary artifacts.
 
-1. resolve/select one validated public IPv4;
-2. generate fresh Reality keypair, UUID, and short ID;
-3. create temporary VLESS Reality server/client configs;
-4. run `sing-box check` on both configs;
-5. launch loopback server and client;
-6. make one short HTTPS HEAD through the loopback SOCKS listener, keeping the URL/SNI hostname and pinning destination IPv4;
-7. record transport success, HTTP status, elapsed time, and bounded diagnostic category;
-8. terminate process groups and prove listener/process cleanup;
-9. delete the temporary directory.
+Require 5/5 transport successes and 5/5 cleanups for Reality PASS.
 
-## Control
+## Sanitized failure evidence
 
-Run the incumbent control once before candidate Reality tests. If it fails, emit `INVALID:REALITY_CONTROL_FAILED` and do not reinterpret all candidates as failures.
+Record stage-level evidence without raw secret-bearing stderr:
 
-## Candidate requirement
+- `CONFIG_CHECK`
+- `SERVER_START`
+- `CLIENT_START`
+- `PROXY_HEAD`
+- `INPUT`
+- `ENVIRONMENT`
+- `INTERNAL`
+- `CLEANUP`
 
-Run exactly five sequential attempts per finalist. Final Reality eligibility requires 5/5 transport success.
-
-A non-000 HTTP status indicates a response was reached; it does not establish website health. Keep `transport_success` and `http_health` separate.
-
-Cleanup failure is run-level `TARGET_DIRTY_STATE` and stops the remaining Reality batch.
+Return failure counts, dominant failure stage, bounded HTTP status, elapsed time, and curl exit code. Never persist test credentials or complete temporary configs.

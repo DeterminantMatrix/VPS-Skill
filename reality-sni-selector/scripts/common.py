@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import math
@@ -20,6 +21,18 @@ TWO_LEVEL_SUFFIXES = {
     "co.jp", "ac.jp", "go.jp", "com.sg", "org.sg", "edu.sg", "gov.sg", "com.hk",
     "org.hk", "edu.hk", "gov.hk", "co.nz", "org.nz", "ac.nz", "com.br", "org.br",
 }
+
+JOB_SCHEMA_VERSION = 4
+WORKER_PROTOCOL = 4
+PROFILE_NAME = "target-measured-v4"
+TARGET_WORKER_FILES = (
+    "common.py",
+    "target_discovery.py",
+    "target_probe.py",
+    "benchmark.py",
+    "reality_selftest.py",
+    "target_worker.py",
+)
 
 
 def validate_hostname(value: str) -> str:
@@ -126,7 +139,7 @@ def fetch_bytes(url: str, *, timeout: float = 8.0, max_bytes: int = 1_000_000, h
     request = urllib.request.Request(
         url,
         data=data,
-        headers={"User-Agent": "reality-sni-selector/3", **(headers or {})},
+        headers={"User-Agent": "reality-sni-selector/4", **(headers or {})},
         method="POST" if data is not None else "GET",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -155,11 +168,39 @@ def source_priority(sources: list[str]) -> int:
     return min((order.get(s, 9) for s in sources), default=9)
 
 
+def policy_priority(state: str | None) -> int:
+    return {
+        "ELIGIBLE": 0,
+        "REVIEW_REQUIRED": 1,
+        "BASELINE_ONLY": 2,
+        "HARD_REJECTED": 9,
+    }.get(str(state or ""), 8)
+
+
 def edge_priority(front_door: str) -> int:
     return {
         "DIRECT_CONFIRMED": 0,
         "DIRECT_LIKELY": 1,
         "UNKNOWN_EDGE_EVIDENCE": 2,
         "UNKNOWN_TOOLING": 3,
-        "PUBLIC_CDN": 9,
+        "SHARED_PLATFORM_CONFIRMED": 9,
+        "PUBLIC_CDN_CONFIRMED": 10,
+        "PUBLIC_CDN": 10,
     }.get(front_door, 8)
+
+
+def compute_worker_manifest(directory: Path) -> str:
+    """Hash the fixed target-worker file set in a stable order."""
+    digest = hashlib.sha256()
+    for name in TARGET_WORKER_FILES:
+        path = directory / name
+        if not path.is_file():
+            raise FileNotFoundError(name)
+        data = path.read_bytes()
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(len(data)).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(data)
+        digest.update(b"\0")
+    return digest.hexdigest()

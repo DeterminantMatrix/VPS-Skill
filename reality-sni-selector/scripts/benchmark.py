@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 from typing import Any
 
-from common import edge_priority, source_priority, stats
+from common import edge_priority, policy_priority, source_priority, stats
 from target_probe import resolve_ipv4_observations, tls_probe_ip
 
 
@@ -17,15 +16,13 @@ def benchmark_candidates(candidates: list[dict[str, Any]], *, samples: int, time
         ips = dns["common_ipv4"] or candidate.get("current_ipv4") or candidate.get("initial_ipv4") or []
         state[host] = {"candidate": candidate, "dns": dns, "ips": ips, "samples": []}
 
-    # Interleave candidates by rounds. Each candidate gets exactly `samples` total samples,
-    # balanced deterministically across its common IPv4 set.
     for round_no in range(samples):
         for candidate in candidates:
             host = candidate["hostname"]
             item = state[host]
             ips = item["ips"]
             if not ips:
-                item["samples"].append({"success": False, "ip": None, "error": "NO_IPV4", "elapsed_ms": None})
+                item["samples"].append({"success": False, "ip": None, "error": "NO_IPV4", "elapsed_ms": None, "round": round_no + 1})
                 continue
             ip = ips[round_no % len(ips)]
             row = tls_probe_ip(host, ip, timeout=timeout)
@@ -54,6 +51,7 @@ def benchmark_candidates(candidates: list[dict[str, Any]], *, samples: int, time
             "incumbent": bool(candidate.get("incumbent")),
             "sources": candidate.get("sources", []),
             "organizations": candidate.get("organizations", []),
+            "distance_km": candidate.get("distance_km"),
             "eligibility": candidate.get("eligibility"),
             "front_door": candidate.get("front_door"),
             "warnings": list(candidate.get("warnings", [])),
@@ -76,7 +74,15 @@ def fast_rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
     p50 = row.get("p50_ms") if row.get("p50_ms") is not None else 1e9
     mad = row.get("mad_ms") if row.get("mad_ms") is not None else 1e9
     front = (row.get("front_door") or {}).get("class", "UNKNOWN")
-    return (-float(row.get("success_rate") or 0.0), float(p50), float(mad), edge_priority(front), source_priority(row.get("sources") or []), row["hostname"])
+    return (
+        policy_priority(row.get("eligibility")),
+        -float(row.get("success_rate") or 0.0),
+        float(p50),
+        float(mad),
+        edge_priority(front),
+        source_priority(row.get("sources") or []),
+        row["hostname"],
+    )
 
 
 def deep_rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
@@ -84,9 +90,23 @@ def deep_rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
     p95 = row.get("p95_ms") if row.get("p95_ms") is not None else 1e9
     mad = row.get("mad_ms") if row.get("mad_ms") is not None else 1e9
     front = (row.get("front_door") or {}).get("class", "UNKNOWN")
-    inconsistent = any((v.get("success_rate") or 0.0) < 0.9 for v in (row.get("per_ip") or {}).values() if (v.get("samples") or 0) >= 3)
-    return (-float(row.get("success_rate") or 0.0), float(p50), float(p95), float(mad), int(inconsistent), edge_priority(front),
-            -int(bool(row.get("exact_target_asn"))), source_priority(row.get("sources") or []), row["hostname"])
+    inconsistent = any(
+        (v.get("success_rate") or 0.0) < 0.9
+        for v in (row.get("per_ip") or {}).values()
+        if (v.get("samples") or 0) >= 3
+    )
+    return (
+        policy_priority(row.get("eligibility")),
+        -float(row.get("success_rate") or 0.0),
+        float(p50),
+        float(p95),
+        float(mad),
+        int(inconsistent),
+        edge_priority(front),
+        -int(bool(row.get("exact_target_asn"))),
+        source_priority(row.get("sources") or []),
+        row["hostname"],
+    )
 
 
 def apply_deep_policy(row: dict[str, Any], incumbent: bool = False) -> dict[str, Any]:

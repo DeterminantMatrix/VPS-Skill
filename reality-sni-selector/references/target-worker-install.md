@@ -1,8 +1,8 @@
-# Target worker installation
+# Target worker installation / upgrade
 
-This is a one-time administrative deployment on an owned VPS. It is deliberately separate from a normal SNI selection run.
+This is a separately authorized administrative action on an owned VPS. It is not part of normal selection.
 
-Install these reviewed files together in a fixed directory such as `/opt/reality-sni-selector/`:
+Install these reviewed files together under `/opt/reality-sni-selector/`:
 
 ```text
 common.py
@@ -13,26 +13,24 @@ reality_selftest.py
 target_worker.py
 ```
 
-Expose a fixed command named `reality-sni-target-worker` that executes:
+Install the reviewed wrapper exactly at:
 
 ```text
-python3 /opt/reality-sni-selector/target_worker.py "$@"
+/usr/local/bin/reality-sni-target-worker
 ```
 
-The normal controller only invokes:
+The wrapper accepts only:
 
 ```text
-reality-sni-target-worker run
+/usr/local/bin/reality-sni-target-worker run
 ```
 
-Do not make the wrapper accept a configurable script path or arbitrary command. Do not install/update the worker automatically during selection.
+and executes `/usr/bin/python3 /opt/reality-sni-selector/target_worker.py run`.
 
-After installation, verify locally on the target that:
+Keep files root-owned or equivalently protected. Do not make the wrapper accept configurable script paths or arbitrary commands.
 
-```text
-reality-sni-target-worker
-```
+## v4 upgrade requirement
 
-returns `FIXED_COMMAND_REQUIRED`, and that only the `run` subcommand accepts a JSON job on stdin.
+v4 freezes a SHA-256 manifest over the six target-worker Python files. After changing any of those files, explicitly redeploy the complete set before the next selection run. A stale deployment must fail closed with `TARGET_WORKER_BUILD_MISMATCH` rather than continue with mixed code.
 
-Keep the worker files root-owned or otherwise protected from the untrusted user context that can initiate selection jobs.
+After deployment, verify that invoking the wrapper without `run` returns `FIXED_COMMAND_REQUIRED` and that a controller job reports worker protocol 4 with the expected manifest.
