@@ -1,9 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 1 ] || [ "$1" != "run" ]; then
+if [ "$#" -ne 1 ]; then
   printf '%s\n' 'FIXED_COMMAND_REQUIRED' >&2
   exit 64
 fi
 
-exec /usr/bin/python3 /opt/reality-sni-selector/target_worker.py run
+case "$1" in
+  identity)
+    exec /usr/bin/python3 -c '
+import hashlib, json, pathlib, sys
+root = pathlib.Path("/opt/reality-sni-selector")
+sys.path.insert(0, str(root))
+import common
+wrapper = pathlib.Path("/usr/local/bin/reality-sni-target-worker")
+identity = {
+    "protocol": common.WORKER_PROTOCOL,
+    "implementation_version": common.IMPLEMENTATION_VERSION,
+    "manifest": common.compute_worker_manifest(root),
+    "wrapper_sha256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+    "profile": common.PROFILE_NAME,
+}
+print(json.dumps({"schema_version": common.JOB_SCHEMA_VERSION, "status": "IDENTITY", "worker": identity}, separators=(",", ":")))
+'
+    ;;
+  run)
+    exec /usr/bin/python3 /opt/reality-sni-selector/target_worker.py run
+    ;;
+  *)
+    printf '%s\n' 'FIXED_COMMAND_REQUIRED' >&2
+    exit 64
+    ;;
+esac

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resilient v4.1 controller entrypoint for target-measured Reality SNI selection."""
+"""Resilient v4.2 controller entrypoint for target-measured Reality SNI selection."""
 from __future__ import annotations
 
 import argparse
@@ -16,12 +16,12 @@ from typing import Any
 import yaml
 
 import controller_core as core
+import worker_lifecycle as lifecycle
 from common import (
     IMPLEMENTATION_VERSION,
     JOB_SCHEMA_VERSION,
     WORKER_PROTOCOL,
     atomic_write_json,
-    compute_worker_manifest,
     validate_hostname,
 )
 from report import render_report, write_rejections_csv
@@ -31,11 +31,7 @@ load_seeds = core.load_seeds
 auto_seed_file = core.auto_seed_file
 resolve_inventory_path = core.resolve_inventory_path
 
-ALIAS_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
-SECRET_RE = re.compile(
-    r"(?i)\b(password|passwd|token|secret|authorization|cookie|private[_ -]?key|api[_ -]?key)\b(\s*[:=]\s*)(\S+)"
-)
-
+ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 def _norm(value: Any) -> str:
     return "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
@@ -189,9 +185,7 @@ def prepare_run_dir(explicit: Path | None, label: str) -> Path:
 
 
 def sanitize_remote_stderr(stderr: bytes, max_chars: int = 600) -> str:
-    text = stderr.decode("utf-8", errors="replace")
-    text = SECRET_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}<redacted>", text)
-    return " ".join(text.split())[:max_chars]
+    return lifecycle.sanitize_stderr(stderr, max_chars=max_chars)
 
 
 def classify_remote_failure(returncode: int | None, stderr_summary: str) -> tuple[str, str]:
@@ -239,6 +233,30 @@ def run_remote(alias: str, job: dict[str, Any], timeout: int) -> tuple[dict[str,
     return None, "TARGET_RESULT_INVALID", diagnostics
 
 
+def _write_blocked(run_dir: Path, stage_path: Path, reason: str, *, guard: dict[str, Any], controller_meta: dict[str, Any], lifecycle_meta: dict[str, Any] | None = None, frozen_run: dict[str, Any] | None = None) -> None:
+    blocked = {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "status": "BLOCKED",
+        "reason": reason,
+        "controller": controller_meta,
+        "top5": [],
+        "preliminary_top5": [],
+        "comparison": [],
+    }
+    atomic_write_json(run_dir / "target-result.json", blocked)
+    atomic_write_json(run_dir / "top5.json", blocked)
+    if lifecycle_meta is not None:
+        atomic_write_json(run_dir / "worker-lifecycle.json", lifecycle_meta)
+    metadata = {"status": reason, "guard": guard, "controller": controller_meta}
+    if lifecycle_meta is not None:
+        metadata["worker_lifecycle"] = lifecycle_meta
+    if frozen_run is not None:
+        metadata["frozen_run"] = frozen_run
+    atomic_write_json(run_dir / "run-metadata.json", metadata)
+    with stage_path.open("a", encoding="utf-8") as handle:
+        handle.write(f"blocked\t{reason}\tselection did not start candidate evaluation\n")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("target", help="inventory public IPv4, exact alias/name, or uniquely matched local inventory name")
@@ -248,11 +266,15 @@ def main() -> int:
     ap.add_argument("--profile", choices=("quick", "audit"), default="quick")
     ap.add_argument("--run-dir", type=Path, help="dedicated output directory; absent/empty only")
     ap.add_argument("--ssh-timeout", type=int, default=2400)
+    ap.add_argument("--worker-bootstrap", choices=("auto", "never"), default="auto", help="auto installs/upgrades only the managed fixed worker before freeze; never fails closed instead")
+    ap.add_argument("--worker-ready-only", action="store_true", help="ensure exact worker readiness, write lifecycle metadata, then stop before freezing or candidate traffic")
     args = ap.parse_args()
 
     root = Path(__file__).resolve().parents[1]
+    scripts_dir = root / "scripts"
     run_dir: Path | None = None
     stage_path: Path | None = None
+    guard: dict[str, Any] | None = None
     try:
         inventory_path = core.resolve_inventory_path(args.inventory)
         guard = inventory_guard(inventory_path, args.target)
@@ -260,16 +282,6 @@ def main() -> int:
         stage_path = run_dir / "stage-status.tsv"
         stage_path.write_text("stage\tstatus\tdetail\n", encoding="utf-8")
         print(f"RUN_DIR:{run_dir}")
-        seed_path = args.seed_file or core.auto_seed_file(root, guard.get("region"))
-        seeds = core.load_seeds(seed_path)
-        if str(args.incumbent).lower() == "auto":
-            incumbent, incumbent_mode = None, "auto"
-        else:
-            incumbent, incumbent_mode = validate_hostname(args.incumbent), "explicit"
-            if incumbent not in seeds:
-                seeds.append(incumbent)
-        manifest = compute_worker_manifest(root / "scripts")
-        job = core.build_job(guard, seeds, incumbent, incumbent_mode, worker_manifest=manifest, profile_mode=args.profile)
     except Exception as exc:
         if run_dir is None:
             try:
@@ -284,24 +296,68 @@ def main() -> int:
             atomic_write_json(run_dir / "top5.json", {"status": "BLOCKED", "reason": "INVENTORY_OR_INPUT_FAILED", "top5": [], "comparison": []})
         return 2
 
-    assert run_dir and stage_path
+    assert run_dir and stage_path and guard
     resolution = guard.get("selector_resolution") or {}
     if resolution.get("warning"):
         with stage_path.open("a", encoding="utf-8") as handle:
             handle.write(f"inventory_resolution\tREVIEW\t{resolution['warning']}:{resolution.get('matched_identifier')}:{resolution.get('score')}\n")
+
+    # v4.2 deliberately makes worker readiness a pre-freeze control-plane step.
+    worker_lifecycle = lifecycle.ensure_worker_ready(
+        guard["alias"],
+        scripts_dir,
+        bootstrap_mode=args.worker_bootstrap,
+        probe_timeout=20,
+        bootstrap_timeout=180,
+    )
+    atomic_write_json(run_dir / "worker-lifecycle.json", worker_lifecycle)
+    with stage_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"worker_readiness\t{'OK' if worker_lifecycle.get('ready') else 'FAILED'}\t"
+            f"{worker_lifecycle.get('status')}:{worker_lifecycle.get('action')}\n"
+        )
+    controller_meta: dict[str, Any] = {
+        "run_dir": str(run_dir),
+        "target_resolution": resolution,
+        "worker_lifecycle": worker_lifecycle,
+    }
+    if not worker_lifecycle.get("ready"):
+        _write_blocked(run_dir, stage_path, str(worker_lifecycle.get("status") or "TARGET_WORKER_NOT_READY"), guard=guard, controller_meta=controller_meta, lifecycle_meta=worker_lifecycle)
+        return 3
+    if args.worker_ready_only:
+        atomic_write_json(run_dir / "run-metadata.json", {"status": "WORKER_READY_ONLY", "guard": guard, "controller": controller_meta, "worker_lifecycle": worker_lifecycle})
+        with stage_path.open("a", encoding="utf-8") as handle:
+            handle.write("complete\tWORKER_READY_ONLY\tno frozen job or candidate traffic\n")
+        print("TARGET_MEASURED_RUN_STATUS:WORKER_READY_ONLY")
+        return 0
+
+    try:
+        seed_path = args.seed_file or core.auto_seed_file(root, guard.get("region"))
+        seeds = core.load_seeds(seed_path)
+        if str(args.incumbent).lower() == "auto":
+            incumbent, incumbent_mode = None, "auto"
+        else:
+            incumbent, incumbent_mode = validate_hostname(args.incumbent), "explicit"
+            if incumbent not in seeds:
+                seeds.append(incumbent)
+        manifest = str(worker_lifecycle["expected_manifest"])
+        job = core.build_job(guard, seeds, incumbent, incumbent_mode, worker_manifest=manifest, profile_mode=args.profile)
+    except Exception as exc:
+        with stage_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"freeze_input\tFAILED\t{type(exc).__name__}\n")
+        _write_blocked(run_dir, stage_path, "FREEZE_INPUT_FAILED", guard=guard, controller_meta=controller_meta, lifecycle_meta=worker_lifecycle)
+        return 2
+
     atomic_write_json(run_dir / "frozen-run.json", job)
     with stage_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"freeze\tOK\tv4.1 {args.profile} profile and expected worker manifest frozen before target evaluation\n")
+        handle.write(f"freeze\tOK\tv4.2 {args.profile} profile frozen only after exact worker readiness\n")
 
     result, remote_status, diagnostics = run_remote(guard["alias"], job, max(60, args.ssh_timeout))
     with stage_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"target_worker\t{remote_status}\t{diagnostics.get('failure_detail') or 'fixed absolute worker command'}\n")
-    controller_meta = {"run_dir": str(run_dir), "target_resolution": resolution, "remote_diagnostics": diagnostics}
+        handle.write(f"target_worker\t{remote_status}\t{diagnostics.get('failure_detail') or 'fixed absolute worker run command'}\n")
+    controller_meta["remote_diagnostics"] = diagnostics
     if result is None:
-        blocked = {"schema_version": JOB_SCHEMA_VERSION, "status": "BLOCKED", "reason": remote_status, "controller": controller_meta, "top5": [], "preliminary_top5": [], "comparison": []}
-        atomic_write_json(run_dir / "target-result.json", blocked)
-        atomic_write_json(run_dir / "top5.json", blocked)
-        atomic_write_json(run_dir / "run-metadata.json", {"status": remote_status, "guard": guard, "frozen_run": job, "controller": controller_meta})
+        _write_blocked(run_dir, stage_path, remote_status, guard=guard, controller_meta=controller_meta, lifecycle_meta=worker_lifecycle, frozen_run=job)
         return 3
 
     result = dict(result)
@@ -322,7 +378,7 @@ def main() -> int:
         "comparison.json": result.get("comparison", []),
         "incumbent-assessment.json": result.get("incumbent_assessment", {}),
         "top5.json": {"status": result.get("status"), "coverage": result.get("coverage", {}), "top5": result.get("top5", []), "preliminary_top5": result.get("preliminary_top5", []), "comparison": result.get("comparison", [])},
-        "run-metadata.json": {"status": result.get("status"), "worker": result.get("worker", {}), "guard": guard, "controller": controller_meta, "controller_frozen_run": job, "target_frozen_run": result.get("frozen_run", {}), "coverage": result.get("coverage", {}), "counts": result.get("counts", {}), "warnings": result.get("warnings", [])},
+        "run-metadata.json": {"status": result.get("status"), "worker": result.get("worker", {}), "guard": guard, "controller": controller_meta, "worker_lifecycle": worker_lifecycle, "controller_frozen_run": job, "target_frozen_run": result.get("frozen_run", {}), "coverage": result.get("coverage", {}), "counts": result.get("counts", {}), "warnings": result.get("warnings", [])},
     }
     for name, payload in mapping.items():
         atomic_write_json(run_dir / name, payload)
