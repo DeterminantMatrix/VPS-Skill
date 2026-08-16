@@ -44,15 +44,16 @@ def _all_ips(node: dict[str, Any]) -> set[str]:
     found = _direct_ips(node)
     access = node.get("access")
     if isinstance(access, dict):
-        value = access.get("host")
-        if isinstance(value, str):
-            found.add(value)
+        for key in ("host", "hostname", "address"):
+            value = access.get(key)
+            if isinstance(value, str):
+                found.add(value)
     return found
 
 
 def _node_score(node: dict[str, Any], target_ip: str) -> int:
     score = 0
-    if target_ip in _direct_ips(node):
+    if target_ip in _all_ips(node):
         score += 10
     if isinstance(node.get("access"), dict):
         score += 4
@@ -99,10 +100,20 @@ def inventory_guard(path: Path, target_ip: str) -> dict[str, Any]:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise ValueError(f"inventory unavailable: {type(exc).__name__}") from exc
+    # The local vps-control inventory is keyed by canonical alias and stores
+    # the management address at hosts.<alias>.access.address. Iterate host
+    # records directly so an access mapping containing the same address is
+    # never mistaken for a host and loses its alias.
     matches: list[tuple[int, dict[str, Any], str | None]] = []
-    for node, hint in _walk_inventory(data):
-        if target_ip in _all_ips(node):
-            matches.append((_node_score(node, target_ip), node, hint))
+    hosts = data.get("hosts")
+    if isinstance(hosts, dict):
+        for canonical, node in hosts.items():
+            if isinstance(node, dict) and target_ip in _all_ips(node):
+                matches.append((_node_score(node, target_ip), node, str(canonical)))
+    else:
+        for node, hint in _walk_inventory(data):
+            if target_ip in _all_ips(node):
+                matches.append((_node_score(node, target_ip), node, hint))
     if not matches:
         raise ValueError("inventory target missing")
     matches.sort(key=lambda item: item[0], reverse=True)
@@ -111,8 +122,12 @@ def inventory_guard(path: Path, target_ip: str) -> dict[str, Any]:
     if len(best) != 1:
         raise ValueError("inventory target ambiguous")
     _, node, hint = best[0]
-    status = str(node.get("status") or "").lower()
-    if node.get("active") is False or node.get("retired") is True or node.get("forbidden") is True or status in {"retired", "forbidden", "inactive", "disabled"}:
+    state = node.get("state") if isinstance(node.get("state"), dict) else {}
+    status = str(node.get("status") or state.get("status") or "").lower()
+    retired = node.get("retired") is True or state.get("retired") is True
+    forbidden = node.get("forbidden") is True or state.get("forbidden") is True
+    inactive = node.get("active") is False or state.get("active") is False
+    if inactive or retired or forbidden or status in {"retired", "forbidden", "inactive", "disabled"}:
         raise ValueError("inventory target inactive/retired/forbidden")
     access = node.get("access") if isinstance(node.get("access"), dict) else {}
     method = str(access.get("method") or node.get("access_method") or "ssh").lower()

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -13,6 +15,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from benchmark import apply_deep_policy, deep_rank_key  # noqa: E402
 from common import mad, percentile, registrable_domain, validate_hostname  # noqa: E402
 from controller_run import build_job, inventory_guard, load_seeds  # noqa: E402
+import reality_selftest  # noqa: E402
 from reality_selftest import _configs  # noqa: E402
 from target_probe import classify_front_door  # noqa: E402
 from target_worker import validate_job  # noqa: E402
@@ -58,6 +61,19 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(tls["reality"]["handshake"]["server"], "1.1.1.1")
         self.assertEqual(client["outbounds"][0]["tls"]["server_name"], "www.example.org")
 
+    def test_sing_box_wrapper_falls_back_to_fixed_elf(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wrapper = root / "sing-box-wrapper"
+            wrapper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            os.chmod(wrapper, 0o755)
+            binary = root / "sing-box"
+            binary.write_bytes(b"\x7fELF" + b"fixture")
+            os.chmod(binary, 0o755)
+            with patch.object(reality_selftest.shutil, "which", return_value=str(wrapper)), \
+                 patch.object(reality_selftest, "SING_BOX_FALLBACKS", (str(binary),)):
+                self.assertEqual(reality_selftest.find_sing_box(), str(binary))
+
     def test_inventory_guard_and_job(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -80,6 +96,37 @@ hosts:
             values = load_seeds(seeds)
             job = build_job(guard, values, "incumbent.example", "explicit")
             validate_job(json.loads(json.dumps(job)))
+
+    def test_local_vps_control_inventory_schema(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            inventory = root / "hosts.yaml"
+            inventory.write_text("""
+schema_version: 1
+inventory_version: test-1
+source_of_truth: inventory/hosts.yaml
+hosts:
+  best-vm-us:
+    inventory_id: best-vm-us
+    alias: best-vm-us
+    region: US
+    access:
+      method: ssh
+      hostname: 155.254.127.55
+      address: 155.254.127.55
+      port: 22
+      user: root
+      proxy_jump: null
+      identity_ref: external:ssh-config
+    capabilities:
+      ssh: true
+    state:
+      retired: false
+      forbidden: false
+""", encoding="utf-8")
+            guard = inventory_guard(inventory, "155.254.127.55")
+            self.assertEqual(guard["alias"], "best-vm-us")
+            self.assertEqual(guard["region"], "US")
 
     def test_job_rejects_port_change(self):
         guard = {"alias": "best-vm-us", "target_ip": "155.254.127.55", "region": "US"}

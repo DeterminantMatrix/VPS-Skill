@@ -19,23 +19,55 @@ from common import is_public_ipv4, validate_hostname
 
 KEY_RE = re.compile(r"(?i)\b(private|public)(?:\s*key)?\s*[:=]\s*([A-Za-z0-9_-]{20,})")
 
+# Some supported sing-box installers expose a management shell script at
+# /usr/local/bin/sing-box and keep the actual ELF in a fixed installation
+# directory.  Keep this list deliberately closed; do not search arbitrary
+# paths or follow user-controlled command input.
+SING_BOX_FALLBACKS = (
+    "/etc/sing-box/bin/sing-box",
+    "/usr/local/lib/sing-box/sing-box",
+    "/opt/sing-box/bin/sing-box",
+    "/opt/sing-box/sing-box",
+    "/usr/bin/sing-box",
+)
+
+
+def _is_executable_elf(path: str) -> bool:
+    try:
+        real = os.path.realpath(path)
+        if not os.path.isfile(real) or not os.access(real, os.X_OK):
+            return False
+        with open(real, "rb") as handle:
+            return handle.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def find_sing_box() -> str | None:
+    """Return a trusted local sing-box ELF, tolerating a fixed shell wrapper."""
+    candidates: list[str] = []
+    discovered = shutil.which("sing-box")
+    if discovered:
+        candidates.append(discovered)
+    candidates.extend(SING_BOX_FALLBACKS)
+    seen: set[str] = set()
+    for candidate in candidates:
+        real = os.path.realpath(candidate)
+        if real in seen:
+            continue
+        seen.add(real)
+        if _is_executable_elf(real):
+            return real
+    return None
+
 
 def environment() -> dict[str, Any]:
-    sing = shutil.which("sing-box")
+    discovered = shutil.which("sing-box")
+    sing = find_sing_box()
     curl = shutil.which("curl")
-    result = {"sing_box": sing, "curl": curl, "ready": False, "reason": None, "version": None}
+    result = {"sing_box": sing or discovered, "curl": curl, "ready": False, "reason": None, "version": None}
     if not sing:
-        result["reason"] = "SING_BOX_MISSING"
-        return result
-    try:
-        real = os.path.realpath(sing)
-        with open(real, "rb") as handle:
-            magic = handle.read(4)
-        if magic != b"\x7fELF":
-            result["reason"] = "SING_BOX_NOT_ELF"
-            return result
-    except OSError:
-        result["reason"] = "SING_BOX_UNREADABLE"
+        result["reason"] = "SING_BOX_NOT_ELF" if discovered else "SING_BOX_MISSING"
         return result
     if not curl:
         result["reason"] = "CURL_MISSING"

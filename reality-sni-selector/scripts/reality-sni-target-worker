@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 1 ] || [ "$1" != "run" ]; then
+  printf '%s\n' 'FIXED_COMMAND_REQUIRED' >&2
+  exit 64
+fi
+
+exec /usr/bin/python3 /opt/reality-sni-selector/target_worker.py run

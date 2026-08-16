@@ -18,6 +18,7 @@ from typing import Any
 from benchmark import apply_deep_policy, benchmark_candidates, deep_rank_key, fast_rank_key
 from common import edge_priority, fetch_bytes, fetch_json, read_json_stdin, source_priority, validate_hostname
 from reality_selftest import environment as reality_environment
+from reality_selftest import find_sing_box
 from reality_selftest import run_candidate
 from target_discovery import discover
 from target_probe import gate_candidate, resolve_ipv4_observations
@@ -184,7 +185,7 @@ def resolve_auto_incumbent() -> tuple[str | None, str | None]:
 
 
 def _tool_version(command: str) -> str | None:
-    path = shutil.which(command)
+    path = find_sing_box() if command == "sing-box" else shutil.which(command)
     if not path:
         return None
     try:
@@ -205,7 +206,7 @@ def preflight(job: dict[str, Any]) -> dict[str, Any]:
             "python3": shutil.which("python3"),
             "curl": shutil.which("curl"),
             "dig": shutil.which("dig"),
-            "sing_box": shutil.which("sing-box"),
+            "sing_box": find_sing_box(),
             "sing_box_version": _tool_version("sing-box"),
         },
         "warnings": [],

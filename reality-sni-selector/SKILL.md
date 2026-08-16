@@ -11,6 +11,7 @@ Use the controller only as the control plane. Treat the selected VPS as the meas
 
 - Handle one explicit VPS per run.
 - Resolve the target from its inventory IPv4 through `/opt/vps-control/inventory/hosts.yaml`; derive and use the existing SSH alias and declared region. Never construct `root@IP`, guess aliases, or use an unrelated monitoring address as the SSH target.
+- In this workspace, use the local inventory schema: `hosts.<canonical>.alias`, `hosts.<canonical>.region`, `hosts.<canonical>.access.address`, `hosts.<canonical>.access.method`, `hosts.<canonical>.capabilities.ssh`, and `hosts.<canonical>.state.retired/forbidden`. Treat `access.address` as a fact for matching only; SSH still uses the declared existing alias.
 - Run candidate discovery and every candidate-related DNS, TCP, TLS, HTTP-header, ASN/CDN, latency, and Reality measurement on the target VPS. Controller-side candidate measurements are not final evidence.
 - Use IPv4 and TCP/443 only. Do not scan ports, CIDRs, arbitrary addresses, or arbitrary ports.
 - Do not download page bodies. HTTP probes are bounded HEAD requests and header-only evidence.
