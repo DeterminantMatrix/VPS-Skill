@@ -286,7 +286,14 @@ def run_attempt(hostname: str, ip: str, env: dict[str, Any] | None = None) -> di
             result["failure_stage"] = "CLEANUP"
 
 
-def run_candidate(hostname: str, ips: list[str], attempts: int = 5, env: dict[str, Any] | None = None) -> dict[str, Any]:
+def run_candidate(
+    hostname: str,
+    ips: list[str],
+    attempts: int = 5,
+    env: dict[str, Any] | None = None,
+    *,
+    fail_fast: bool = False,
+) -> dict[str, Any]:
     usable = [ip for ip in ips if is_public_ipv4(ip)]
     if not usable:
         return {
@@ -312,6 +319,8 @@ def run_candidate(hostname: str, ips: list[str], attempts: int = 5, env: dict[st
         if not row.get("cleanup_success"):
             dirty = True
             break
+        if fail_fast and not row.get("transport_success"):
+            break
     successes = sum(1 for r in rows if r.get("transport_success"))
     cleanups = sum(1 for r in rows if r.get("cleanup_success"))
     passed = len(rows) == attempts and successes == attempts and cleanups == attempts and not dirty
@@ -329,4 +338,5 @@ def run_candidate(hostname: str, ips: list[str], attempts: int = 5, env: dict[st
         "code": code,
         "failure_counts": dict(sorted(failure_counter.items())),
         "dominant_failure_stage": dominant,
+        "early_stopped": bool(fail_fast and len(rows) < attempts and not dirty),
     }

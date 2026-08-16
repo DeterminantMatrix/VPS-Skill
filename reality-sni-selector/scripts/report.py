@@ -52,12 +52,27 @@ def _reality(row: dict[str, Any]) -> str:
     return "NOT_TESTED"
 
 
+
+def _assessment_metrics(assessment: dict[str, Any]) -> str:
+    metrics = assessment.get("metrics") or {}
+    parts = []
+    for key, label, suffix in (("success_rate", "success", ""), ("p50_ms", "P50", " ms"), ("p95_ms", "P95", " ms"), ("mad_ms", "MAD", " ms")):
+        value = metrics.get(key)
+        if value is None:
+            continue
+        if key == "success_rate":
+            parts.append(f"{label} {_pct(value)}")
+        else:
+            parts.append(f"{label} {value}{suffix}")
+    return ", ".join(parts) if parts else "measurement incomplete"
+
 def render_report(result: dict[str, Any]) -> str:
     counts = result.get("counts") or {}
     preflight = result.get("preflight") or {}
     coverage = result.get("coverage") or {}
     frozen = result.get("frozen_run") or {}
     comparison = result.get("comparison") or []
+    assessment = result.get("incumbent_assessment") or {}
     lines = [
         "# Reality SNI selection report",
         "",
@@ -65,8 +80,28 @@ def render_report(result: dict[str, Any]) -> str:
         f"- Target egress IPv4: `{preflight.get('observed_egress_ip') or 'unknown'}`",
         f"- Region: `{frozen.get('region') or 'unknown'}`",
         f"- Incumbent: `{frozen.get('incumbent') or 'unknown'}`",
+        f"- Run profile: `{coverage.get('profile') or (frozen.get('profile') or {}).get('run_mode') or 'unknown'}`",
         f"- Coverage: `{coverage.get('status', 'unknown')}` ({coverage.get('validated', 0)} / goal {coverage.get('goal', 'unknown')})",
         f"- Selection maturity: `{coverage.get('selection_maturity', 'unknown')}`",
+        "",
+        "## Current SNI assessment",
+        "",
+        f"- Verdict: **{assessment.get('verdict', '暂无法评估')}** (`{assessment.get('code', 'UNABLE_TO_ASSESS')}`)",
+        f"- Confidence: `{assessment.get('confidence', 'LOW')}`",
+        f"- Current metrics: {_assessment_metrics(assessment)}",
+        f"- Reality control: `{((assessment.get('metrics') or {}).get('reality_control') or 'NOT_RUN')}`",
+        "",
+    ]
+    alternative = assessment.get("best_alternative") or {}
+    if alternative:
+        lines.append(
+            f"- Best selectable alternative: `{alternative.get('hostname')}` — P50 {_fmt(alternative.get('p50_ms'), ' ms')}, "
+            f"P95 {_fmt(alternative.get('p95_ms'), ' ms')}, P50 improvement {_fmt(alternative.get('p50_improvement_pct'), '%')}"
+        )
+    reasons = assessment.get("reasons") or []
+    if reasons:
+        lines.append("- Decision reasons: " + ", ".join(f"`{item}`" for item in reasons))
+    lines.extend([
         "",
         "## Stage counts",
         "",
@@ -79,9 +114,11 @@ def render_report(result: dict[str, Any]) -> str:
         f"    - Diversity-budget deferred: **{counts.get('deferred_diversity', 0)}**",
         f"- Fast benchmarked: **{counts.get('fast_benchmarked', 0)}**",
         f"  - Deep benchmarked: **{counts.get('deep_benchmarked', 0)}**",
+        f"    - Reused Fast samples in Deep: **{counts.get('deep_reused_samples', 0)}**",
+        f"    - New Deep samples: **{counts.get('deep_new_samples', 0)}**",
         f"    - Reality tested: **{counts.get('reality_tested', 0)}**",
         f"      - Reality passed: **{counts.get('reality_passed', 0)}**",
-        f"      - Final selectable: **{counts.get('selectable', 0)}**",
+        f"      - Final selectable: **{counts.get('selectable', 0)} / target {counts.get('selectable_target', 5)}**",
         "",
         "## Recommendation comparison",
         "",
@@ -89,7 +126,7 @@ def render_report(result: dict[str, Any]) -> str:
         "",
         "| Rank | Domain | Recommendation | Final / policy | Front door / platform | TLS success | P50 | P95 | MAD | Reality | ASN / org | vs incumbent P50 |",
         "|---:|---|---|---|---|---:|---:|---:|---:|---|---|---:|",
-    ]
+    ])
     for row in comparison:
         lines.append(
             "| {rank} | `{host}` | **{rec}** | `{final}` / `{policy}` | `{front}` | {success} | {p50} | {p95} | {mad} | `{reality}` | `{asn}` | {improve} |".format(
