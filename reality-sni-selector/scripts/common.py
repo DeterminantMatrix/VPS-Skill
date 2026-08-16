@@ -25,7 +25,7 @@ TWO_LEVEL_SUFFIXES = {
 JOB_SCHEMA_VERSION = 4
 WORKER_PROTOCOL = 4
 PROFILE_NAME = "target-measured-v4"
-IMPLEMENTATION_VERSION = "4.1"
+IMPLEMENTATION_VERSION = "4.2"
 TARGET_WORKER_FILES = (
     "common.py",
     "target_discovery.py",
@@ -140,7 +140,7 @@ def fetch_bytes(url: str, *, timeout: float = 8.0, max_bytes: int = 1_000_000, h
     request = urllib.request.Request(
         url,
         data=data,
-        headers={"User-Agent": "reality-sni-selector/4", **(headers or {})},
+        headers={"User-Agent": "reality-sni-selector/4.2", **(headers or {})},
         method="POST" if data is not None else "GET",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:

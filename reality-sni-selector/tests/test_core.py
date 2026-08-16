@@ -74,7 +74,7 @@ class CoreTests(unittest.TestCase):
             guard = inventory_guard(p, "155.254.127.55")
         job = build_job(guard, [], "old.example", "explicit", worker_manifest="a" * 64)
         validate_job(json.loads(json.dumps(job)))
-        self.assertEqual((job["implementation_version"], job["limits"]["eligibility_pool"], job["limits"]["fast_samples"]), ("4.1", 60, 3))
+        self.assertEqual((job["implementation_version"], job["limits"]["eligibility_pool"], job["limits"]["fast_samples"]), ("4.2", 60, 3))
 
     def test_audit_profile(self):
         job = build_job(self._guard(), [], "old.example", "explicit", worker_manifest="a" * 64, profile_mode="audit")
@@ -117,7 +117,7 @@ class CoreTests(unittest.TestCase):
         old = json.dumps({"schema_version": 3}).encode()
         with patch.object(controller_run.subprocess, "Popen", return_value=P(old)):
             self.assertEqual(controller_run.run_remote("best-vm-us", job, 60)[1], "TARGET_WORKER_VERSION_MISMATCH")
-        wrong = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.1", "manifest": "b" * 64}}).encode()
+        wrong = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.2", "manifest": "b" * 64}}).encode()
         with patch.object(controller_run.subprocess, "Popen", return_value=P(wrong)):
             self.assertEqual(controller_run.run_remote("best-vm-us", job, 60)[1], "TARGET_WORKER_BUILD_MISMATCH")
 

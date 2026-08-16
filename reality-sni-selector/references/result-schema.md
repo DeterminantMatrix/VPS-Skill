@@ -1,4 +1,4 @@
-# Result schema v4 / implementation 4.1
+# Result schema v4 / implementation 4.2
 
 The worker returns one JSON object containing at least:
 
@@ -54,3 +54,8 @@ Produce a recommendation-sorted multi-dimensional comparison with at least five 
 ## Efficiency counters
 
 Counts should include Fast/Deep candidate counts, reused Fast samples inside Deep, newly measured Deep samples, Reality candidates attempted, Reality passes, selectable count, and selectable target.
+
+
+## Controller worker lifecycle artifact
+
+The controller writes `worker-lifecycle.json` before freeze. It records the preflight identity state, whether the fixed worker was already ready/installed/upgraded, the expected manifest/wrapper hash, backup metadata when applicable, and the post-bootstrap identity result. This artifact contains no SNI candidate measurements.
