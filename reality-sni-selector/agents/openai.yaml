@@ -1,4 +1,0 @@
-interface:
-  display_name: "优选SNI"
-  short_description: "为 VPS 优选并安全上线真实、稳定、可复测的 REALITY SNI。"
-  default_prompt: "Use $reality-sni-selector to discover, score, fairly compare, and safely roll out a production-suitable REALITY SNI for my VPS."
