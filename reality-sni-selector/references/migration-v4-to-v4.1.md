@@ -10,3 +10,9 @@ Key changes:
 - CT becomes QUICK backfill rather than an unconditional pass when regional sources are already sufficient.
 - Candidate Reality tests fail fast after the first clean transport failure and continue down the ranked queue until five selectable candidates or the cap is reached.
 - The run emits `incumbent_assessment` and `incumbent-assessment.json` with an explicit current-SNI verdict.
+
+- Target selectors may be exact IPv4/name/alias or a uniquely high-confidence fuzzy inventory name; fuzzy decisions are explicitly recorded.
+- Controller artifacts always go to a dedicated run directory instead of the invocation parent directory.
+- Exit 126/127 with `No such file or directory`/missing-command/bad-interpreter evidence maps to `TARGET_WORKER_UNAVAILABLE`, with a bounded secret-redacted stderr summary in controller metadata.
+- `--worker-check-only` provides a read-only post-deployment wrapper/protocol/manifest check through the same fixed remote command.
+- Read-only local Skill validation must redirect Python bytecode caches or use a writable checkout.
