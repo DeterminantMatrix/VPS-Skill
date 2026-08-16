@@ -25,6 +25,7 @@ TWO_LEVEL_SUFFIXES = {
 JOB_SCHEMA_VERSION = 4
 WORKER_PROTOCOL = 4
 PROFILE_NAME = "target-measured-v4"
+IMPLEMENTATION_VERSION = "4.1"
 TARGET_WORKER_FILES = (
     "common.py",
     "target_discovery.py",

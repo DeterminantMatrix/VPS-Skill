@@ -1,19 +1,23 @@
 # Benchmark policy
 
-## Fast stage
+## QUICK Fast stage
 
-- At most 50 candidates including the incumbent baseline when available.
-- Exactly 5 interleaved TCP+TLS samples per candidate by default.
-- Balance samples deterministically across current common IPv4s.
-- Use success rate, P50, MAD, and max for coarse ranking.
-- Do not use a five-sample P95 as a decisive statistic.
+- At most 30 candidates including the incumbent baseline.
+- Exactly 3 interleaved TCP+TLS samples per candidate.
+- Use this stage only for coarse ordering; do not treat a 3-sample tail percentile as decisive.
+
+## AUDIT Fast stage
+
+- At most 50 candidates including the incumbent.
+- 5 interleaved samples per candidate.
 
 ## Deep stage
 
-- At most 10 candidates including the incumbent baseline.
-- Exactly 20 interleaved samples per candidate by default.
+- At most 10 candidates including the incumbent.
+- Target exactly 20 **total same-run samples** per candidate.
+- Reuse Fast samples, then interleave only the missing samples. QUICK therefore normally adds 17 samples, not another independent 20.
 - Report success rate, P50, P90, P95, max, MAD, and per-IP statistics.
-- Require >=95% overall TLS success for non-incumbents.
+- Require >=95% overall TLS success for selectable non-incumbents.
 - Require >=90% per-IP success when that IP has at least three samples.
 
 ## Ordering
@@ -30,6 +34,4 @@ Use lexicographic ordering:
 8. exact target ASN as a late preference;
 9. source/locality evidence.
 
-The incumbent is guaranteed as a baseline but does not gain policy preference merely because it is incumbent.
-
-`latency_target_ms` is advisory. Return the best evidence even when every candidate is above the target.
+The incumbent is guaranteed as a baseline but receives no policy exemption in its separate incumbent assessment. `latency_target_ms` remains advisory.

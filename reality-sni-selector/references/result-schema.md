@@ -1,6 +1,6 @@
-# Result schema v4
+# Result schema v4 / implementation 4.1
 
-The worker returns one JSON object with:
+The worker returns one JSON object containing at least:
 
 ```text
 schema_version
@@ -19,6 +19,7 @@ reality
 preliminary_top5
 top5
 comparison
+incumbent_assessment
 rejections
 warnings
 errors
@@ -27,42 +28,29 @@ counts
 
 ## Independent candidate dimensions
 
-Keep these separate:
+Keep policy eligibility, benchmark eligibility, Reality compatibility, and final state separate. `SELECTABLE` requires a clean policy state, benchmark reliability pass, Reality 5/5 PASS, and clean cleanup. Reality PASS never clears a policy rejection.
 
-- `policy_eligibility`: `ELIGIBLE`, `REVIEW_REQUIRED`, `HARD_REJECTED`, `BASELINE_ONLY`
-- `benchmark_eligibility`: `PASS` or a benchmark hard-failure state
-- `reality_compatibility`: `PASS`, `FAIL`, `NOT_TESTED`
-- `final_state`: `SELECTABLE`, `REVIEW_REQUIRED`, `POLICY_REJECTED`, `REALITY_FAILED`, `NOT_REALITY_TESTED`, `BASELINE`, or ranked-out equivalent
+## Current SNI assessment
 
-`SELECTABLE` requires policy eligibility, benchmark pass, Reality PASS, and clean cleanup. Reality PASS never clears a policy rejection.
+`incumbent_assessment` contains:
+
+- hostname;
+- machine code and Chinese verdict;
+- confidence;
+- reason codes;
+- current policy/reliability/P50/P95/MAD/Reality-control metrics;
+- best fully selectable alternative and relative improvements when available.
+
+See `incumbent-assessment.md` for verdict precedence.
 
 ## Coverage
 
-Return:
-
-- `goal`
-- `validated`
-- `status`: `GOOD`, `LIMITED`, `SPARSE`
-- `selection_maturity`: `MATURE` only for GOOD, otherwise `PROVISIONAL`
-- `source_errors`
+Return profile (`quick`/`audit`), goal, validated count, `GOOD/LIMITED/SPARSE`, selection maturity (`QUICK_CONFIDENT`, `AUDIT_MATURE`, or `PROVISIONAL`), CT-skip evidence, and source errors.
 
 ## Comparison
 
-Produce a recommendation-sorted multi-dimensional comparison with at least five distinct measured domains whenever at least five exist. Include the incumbent baseline even if this extends the table beyond five rows.
+Produce a recommendation-sorted multi-dimensional comparison with at least five distinct measured domains whenever at least five exist. Include the incumbent baseline even if this extends the table. Include final/policy state, front-door/platform, TLS success, P50/P90/P95/MAD/max, Reality result/failure stage, ASN/organization evidence, and incumbent P50 improvement. Never fabricate rows.
 
-Each comparison row should include, when measurable:
+## Efficiency counters
 
-- recommendation rank and level;
-- hostname;
-- final/policy state;
-- benchmark stage;
-- front-door class/provider/platform;
-- success rate;
-- P50/P90/P95/MAD/max;
-- per-IP consistency;
-- Reality compatibility and sanitized failure summary;
-- ASN/organization evidence and exact-target-ASN flag;
-- incumbent P50 improvement;
-- warnings/review notes.
-
-If fewer than five distinct measured domains exist, return all available rows and emit `INSUFFICIENT_COMPARISON_DOMAINS`.
+Counts should include Fast/Deep candidate counts, reused Fast samples inside Deep, newly measured Deep samples, Reality candidates attempted, Reality passes, selectable count, and selectable target.

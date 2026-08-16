@@ -132,6 +132,9 @@ def ct_names(base: str, max_names: int) -> tuple[list[str], str | None]:
 
 def discover(job: dict[str, Any], preflight: dict[str, Any]) -> dict[str, Any]:
     limits = job["limits"]
+    profile = job["profile"]
+    quick = profile.get("run_mode") == "quick"
+    stop_target = int(profile.get("source_stop_target", limits["source_pool_cap"]))
     records: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
     incumbent = job["incumbent"]
@@ -142,67 +145,80 @@ def discover(job: dict[str, Any], preflight: dict[str, Any]) -> dict[str, Any]:
 
     loc = preflight.get("location") or {}
     lat, lon = loc.get("latitude"), loc.get("longitude")
+    city = str(loc.get("city") or "")
     region_mismatch = bool(preflight.get("region_mismatch"))
 
-    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)) and not region_mismatch:
-        primary = int(job["profile"]["primary_radius_km"])
-        expanded = int(job["profile"]["expanded_radius_km"])
-        for source_func, source_name in ((wikidata_nearby, "wikidata"), (osm_nearby, "osm")):
-            items, err = source_func(float(lat), float(lon), primary)
-            if err:
-                errors.append(err)
-            for host, org in items:
-                add_record(records, host, source_name, org)
-        if len(records) < int(job["profile"]["coverage_goal"]):
-            for source_func, source_name in ((wikidata_nearby, "wikidata"), (osm_nearby, "osm")):
-                items, err = source_func(float(lat), float(lon), expanded)
+    def collect_parallel(radius: int, include_openalex: bool = False) -> None:
+        jobs: list[tuple[str, Any]] = [("wikidata", lambda: wikidata_nearby(float(lat), float(lon), radius)),
+                                      ("osm", lambda: osm_nearby(float(lat), float(lon), radius))]
+        if include_openalex and city:
+            jobs.append(("openalex", lambda: openalex_city(city)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+            future_map = {executor.submit(fn): source for source, fn in jobs}
+            for future in concurrent.futures.as_completed(future_map):
+                source = future_map[future]
+                try:
+                    items, err = future.result()
+                except Exception as exc:
+                    items, err = [], f"{source}:{type(exc).__name__}"
                 if err:
                     errors.append(err)
                 for host, org in items:
-                    add_record(records, host, source_name, org)
+                    add_record(records, host, source, org)
+
+    if isinstance(lat, (int, float)) and isinstance(lon, (int, float)) and not region_mismatch:
+        primary = int(profile["primary_radius_km"])
+        expanded = int(profile["expanded_radius_km"])
+        collect_parallel(primary, include_openalex=True)
+        # Quick mode expands only when the primary/local sources did not produce
+        # enough diverse material. Audit mode retains the broad second pass.
+        if not quick or len(records) < stop_target:
+            collect_parallel(expanded, include_openalex=False)
     else:
         errors.append("LOCATION_DEGRADED" if not region_mismatch else "REGION_MISMATCH_REVIEW")
+        if city and not region_mismatch:
+            items, err = openalex_city(city)
+            if err:
+                errors.append(err)
+            for host, org in items:
+                add_record(records, host, "openalex", org)
 
-    city = str(loc.get("city") or "")
-    if city and not region_mismatch:
-        items, err = openalex_city(city)
-        if err:
-            errors.append(err)
-        for host, org in items:
-            add_record(records, host, "openalex", org)
-
-    # Passive CT is constrained to known institutional base domains and a fixed failure budget.
-    bases = []
-    for host, rec in list(records.items()):
-        if "seed" in rec["sources"] or "wikidata" in rec["sources"] or "osm" in rec["sources"]:
-            try:
-                base = registrable_domain(host)
-            except ValueError:
-                continue
-            if base not in bases:
-                bases.append(base)
-            if len(bases) >= int(limits.get("ct_base_cap", 40)):
-                break
-    consecutive_failures = 0
-    ct_stopped = False
-    for base in bases:
-        if consecutive_failures >= int(job["profile"]["ct_failure_budget"]):
-            ct_stopped = True
-            break
-        names, err = ct_names(base, int(limits.get("ct_max_per_domain", 20)))
-        if err:
-            consecutive_failures += 1
-            errors.append(err)
-            continue
+    # Passive CT is backfill in QUICK mode. If direct regional/institutional
+    # sources already reached the source stop target, skip CT entirely.
+    ct_skipped_sufficient = quick and len(records) >= stop_target
+    if not ct_skipped_sufficient:
+        bases = []
+        for host, rec in list(records.items()):
+            if "seed" in rec["sources"] or "wikidata" in rec["sources"] or "osm" in rec["sources"]:
+                try:
+                    base = registrable_domain(host)
+                except ValueError:
+                    continue
+                if base not in bases:
+                    bases.append(base)
+                if len(bases) >= int(limits.get("ct_base_cap", 40)):
+                    break
         consecutive_failures = 0
-        for host in names:
-            add_record(records, host, "ct")
-        if len(records) >= int(limits["source_pool_cap"]):
-            break
-    if ct_stopped:
-        errors.append("CT_SKIPPED_AFTER_FAILURE_BUDGET")
+        ct_stopped = False
+        for base in bases:
+            if consecutive_failures >= int(profile["ct_failure_budget"]):
+                ct_stopped = True
+                break
+            names, err = ct_names(base, int(limits.get("ct_max_per_domain", 20)))
+            if err:
+                consecutive_failures += 1
+                errors.append(err)
+                continue
+            consecutive_failures = 0
+            for host in names:
+                add_record(records, host, "ct")
+            if len(records) >= int(limits["source_pool_cap"]):
+                break
+            if quick and len(records) >= stop_target:
+                break
+        if ct_stopped:
+            errors.append("CT_SKIPPED_AFTER_FAILURE_BUDGET")
 
-    # Apply source cap deterministically, keeping incumbent and direct institutional sources first.
     priority = {"incumbent": 0, "seed": 1, "wikidata": 2, "osm": 3, "openalex": 4, "ct": 5}
     ordered = sorted(records.values(), key=lambda r: (min(priority.get(s, 9) for s in r["sources"]), r["hostname"]))
     ordered = ordered[: int(limits["source_pool_cap"])]
@@ -226,11 +242,14 @@ def discover(job: dict[str, Any], preflight: dict[str, Any]) -> dict[str, Any]:
     validated.sort(key=lambda r: (0 if r["hostname"] == incumbent else 1, min(priority.get(s, 9) for s in r["sources"]), r["hostname"]))
     validated = validated[: int(limits["discovered_cap"])]
     count = len(validated)
-    coverage = "GOOD" if count >= 400 else "LIMITED" if count >= 100 else "SPARSE"
+    goal = int(profile["coverage_goal"])
+    coverage = "GOOD" if count >= goal else "LIMITED" if count >= min(100, goal) else "SPARSE"
     return {
         "source_records": ordered,
         "validated": validated,
         "coverage": coverage,
         "errors": sorted(set(errors)),
+        "ct_skipped_sufficient_sources": ct_skipped_sufficient,
         "counts": {"source_records": len(ordered), "validated_ipv4": count},
     }
+
