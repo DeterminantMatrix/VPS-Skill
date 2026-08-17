@@ -71,8 +71,9 @@ def render_report(result: dict[str, Any]) -> str:
         f"- 当前 SNI：`{current_host}` → **{current_verdict}**",
         f"- 最佳新候选：`{decision.get('recommended_sni') or '无'}` — `{decision.get('recommended_grade') or 'N/A'}` {decision.get('recommended_label') or ''}",
         f"- 当前 SNI 与首选取舍：{assessment.get('tradeoff_text') or '无足够比较证据'}",
-        f"- 最终 SELECTABLE：**{counts.get('selectable', len(top))} / {counts.get('selectable_target', 5)}**",
-        f"- 候选自身置信度：**{_confidence_zh(decision.get('candidate_confidence'))}**；搜索覆盖置信度：**{_confidence_zh(decision.get('search_confidence'))}**；综合推荐置信度：**{_confidence_zh(decision.get('overall_recommendation_confidence'))}**",
+        f"- 最终 SELECTABLE 独立域名家族：**{counts.get('selectable_families', counts.get('selectable', len(top)))} / {counts.get('selectable_target', 5)}**",
+        f"- 质量目标：**{'已达到' if decision.get('quality_target_met') else '未达到'}**（目标 P50 `{(frozen.get('profile') or {}).get('latency_target_ms', 60)} ms`；未达到时仍会继续 bounded refill/search，直到耗尽或命中上限）。",
+        f"- 置信度：Candidate **{_confidence_zh(decision.get('candidate_confidence'))}** / Run Coverage **{_confidence_zh(decision.get('run_coverage_confidence', decision.get('search_confidence')))}** / Global Optimality **{_confidence_zh(decision.get('global_optimality_confidence'))}** / Overall **{_confidence_zh(decision.get('overall_recommendation_confidence'))}**",
         "",
         "## B. 当前 SNI 健康卡",
         "",
@@ -98,16 +99,16 @@ def render_report(result: dict[str, Any]) -> str:
     lines.extend([
         "## C. Top 5 核心决策表",
         "",
-        "有 5 个 `SELECTABLE` 时必须完整显示 5 个；不足 5 个时只显示真实通过者，不伪造候选。",
+        "Top 5 默认要求 5 个不同 registrable-domain family；同一根域的 `www`/apex 只作为 family alternative，不重复占主表位置。",
         "",
-        "| # | SNI | 梯队 | 推荐 | Protocol | TLS / ALPN | Policy | Reality | P50 / P95 | TLS可靠性 / 稳定性 | Network | Front Door | 风险 | 综合置信度 |",
+        "| # | SNI / Family | 梯队 | 推荐 | Protocol | TLS / ALPN | Policy | Reality | P50 / P95 | TLS可靠性 / 延迟一致性 | Network | Front Door | 风险 | 综合置信度 |",
         "|---:|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ])
     for row in top:
         lines.append(
             "| {rank} | `{host}` | `{tier}` | **{grade} {label}** | `{protocol}` | `{tlsver}` | `{policy}` | `{reality}` | {p50} / {p95} | `{tls_rel}` / `{stability}` | `{network}` | `{front}` | `{risk}` | `{confidence}` |".format(
                 rank=row.get("recommendation_rank", "?"),
-                host=row.get("hostname", "unknown"),
+                host=f"{row.get('hostname', 'unknown')} / {row.get('candidate_family') or row.get('hostname', 'unknown')}",
                 tier=row.get("recommendation_tier", "unknown"),
                 grade=row.get("recommendation_grade", "?"),
                 label=row.get("recommendation_label", ""),
@@ -118,7 +119,7 @@ def render_report(result: dict[str, Any]) -> str:
                 p50=_fmt(row.get("p50_ms"), " ms"),
                 p95=_fmt(row.get("p95_ms"), " ms"),
                 tls_rel=row.get("tls_reliability_grade", row.get("tls_grade", "unknown")),
-                stability=row.get("runtime_stability_grade", "unknown"),
+                stability=row.get("latency_consistency_grade", row.get("runtime_stability_grade", "unknown")),
                 network=_network_affinity(row),
                 front=_front(row),
                 risk=_risk_zh(row.get("durability_risk")),
@@ -127,7 +128,7 @@ def render_report(result: dict[str, Any]) -> str:
         )
     lines.append("")
     if len(top) < 5:
-        lines.append(f"> `FEWER_THAN_FIVE_SELECTABLE`: 本轮只确认 **{len(top)}** 个完整 SELECTABLE 候选。")
+        lines.append(f"> `FEWER_THAN_FIVE_SELECTABLE_FAMILIES`: 本轮只确认 **{len(top)}** 个完整 SELECTABLE 候选。")
         lines.append("")
 
     lines.extend(["## D. 候选详细卡与模型评语事实", ""])
@@ -142,14 +143,15 @@ def render_report(result: dict[str, Any]) -> str:
             f"- **Protocol**：`{_protocol_label(row)}` — {_protocol_details(row)}；观测 TLS/ALPN：`{_tls_versions(row)}`。",
             f"- **Safety / Policy**：`{_policy_label(row)}`；Front Door：`{_front(row)}`；ASN/组织：`{_asn_org(row)}`。",
             f"- **Reality**：`{_reality_label(row)}`；Final：`{row.get('final_state') or row.get('final')}`。",
-            f"- **Reliability**：TLS `{_pct(row.get('success_rate'))}` / grade `{row.get('tls_reliability_grade', row.get('tls_grade', 'unknown'))}`；运行稳定性 `{row.get('runtime_stability_grade', 'unknown')}`。",
+            f"- **Reliability**：TLS transport `{_pct(row.get('success_rate'))}` / grade `{row.get('tls_reliability_grade', row.get('tls_grade', 'unknown'))}`；Reality `{row.get('reality_grade', 'unknown')}`；延迟一致性 `{row.get('latency_consistency_grade', row.get('runtime_stability_grade', 'unknown'))}`。",
             f"- **Performance**：P50 `{_fmt(row.get('p50_ms'), ' ms')}`；P95 `{_fmt(row.get('p95_ms'), ' ms')}`；MAD `{_fmt(row.get('mad_ms'), ' ms')}`；等级 `{row.get('performance_grade', 'unknown')}`。",
             f"- **Network affinity**：`{_network_affinity(row)}`。",
             f"- **Discovery provenance**：lanes `{row.get('lanes') or []}`；sources `{row.get('sources') or []}`。",
             f"- **Operational risk**：`{row.get('durability_risk', 'unknown')}`；这是基于本轮可观察证据的启发式风险，不代表未来可用性保证。",
             f"- **与当前 SNI**：{relation}。",
             f"- **排名理由**：{row.get('ranking_rationale') or '无'}",
-            f"- **置信度**：Candidate `{row.get('candidate_confidence', 'LOW')}` / Search `{row.get('search_confidence', 'LOW')}` / Overall `{row.get('overall_recommendation_confidence', 'LOW')}`。",
+            f"- **Family**：`{row.get('candidate_family') or row.get('hostname')}`；同 family 备选 `{row.get('family_alternatives') or []}`。",
+            f"- **置信度**：Candidate `{row.get('candidate_confidence', 'LOW')}` / Run Coverage `{row.get('run_coverage_confidence', row.get('search_confidence', 'LOW'))}` / Global Optimality `{row.get('global_optimality_confidence', 'LOW')}` / Overall `{row.get('overall_recommendation_confidence', 'LOW')}`。",
             f"- **模型评语事实集**：`{row.get('model_commentary_facts')}`",
             "- **模型评语规则**：大模型只能解释上述事实，写 1–3 句中文点评；不得发明历史 uptime、未来稳定性、未测 ASN/CDN 关系或真实客户端链路表现。",
             "",
@@ -176,9 +178,13 @@ def render_report(result: dict[str, Any]) -> str:
         f"- Combined coverage：`{coverage.get('status', 'unknown')}`；Selection maturity：`{coverage.get('selection_maturity', 'unknown')}`",
         f"- Active discovery lanes：`{coverage.get('active_discovery_lanes') or []}`",
         f"- Validated lane counts：`{coverage.get('lane_counts') or {}}`",
-        f"- Search confidence：**{_confidence_zh(decision.get('search_confidence'))}**",
+        f"- Run Coverage confidence：**{_confidence_zh(decision.get('run_coverage_confidence', decision.get('search_confidence')))}**",
+        f"- Global Optimality confidence：**{_confidence_zh(decision.get('global_optimality_confidence'))}**",
+        f"- Search saturation：`{coverage.get('saturation') or {}}`",
+        f"- Source lane reserve：`{(coverage.get('source_selection') or {}).get('reserve_actual') or {}}`",
+        f"- Validated lane reserve：`{(coverage.get('validated_selection') or {}).get('reserve_actual') or {}}`",
         "",
-        "> Institution 是高质量偏好来源，不是候选资格条件。v4.4 同时使用 General Regional、Network Affinity、Institutional 与跨通道 Passive Expansion；最终资格仍由 Protocol / Safety / Reliability / Reality 决定。",
+        "> Institution 是高质量偏好来源，不是候选资格条件。v4.5 同时使用 General Regional、Network Affinity、Institutional 与跨通道 Passive Expansion；最终资格仍由 Protocol / Safety / Reliability / Reality 决定。",
         "",
     ])
 
@@ -188,24 +194,27 @@ def render_report(result: dict[str, Any]) -> str:
         "",
         f"- Target ASN / prefix：`{affinity.get('target_asn') or 'unknown'}` / `{affinity.get('target_prefix') or 'unknown'}`",
         f"- Discovery method：`{affinity.get('method') or 'unknown'}`；active scan：`{affinity.get('active_scan')}`",
-        f"- Passive IP sample：**{affinity.get('passive_ips_sampled', 0)}**；affinity hostnames discovered：**{affinity.get('affinity_hostnames_discovered', 0)}**；validated：**{affinity.get('affinity_lane_validated', 0)}**",
-        f"- SAME_ASN：Gate seen **{affinity.get('same_asn_gate_seen', 0)}** → Eligible **{affinity.get('same_asn_eligible', 0)}** → Fast **{affinity.get('same_asn_fast', 0)}** → Deep **{affinity.get('same_asn_deep', 0)}** → Reality tested **{affinity.get('same_asn_reality_tested', 0)}** → PASS **{affinity.get('same_asn_reality_passed', 0)}** → SELECTABLE **{affinity.get('same_asn_selectable', 0)}**",
+        f"- Passive IP sample：**{affinity.get('passive_ips_sampled', 0)}**；affinity discovered：hostnames **{affinity.get('affinity_hostnames_discovered', 0)}** / root domains **{affinity.get('affinity_root_domains_discovered', 0)}**；validated hostnames/families **{affinity.get('affinity_lane_validated', 0)} / {affinity.get('affinity_lane_validated_families', 0)}**",
+        f"- SAME_ASN：Gate **{affinity.get('same_asn_gate_seen', 0)} hosts / {affinity.get('same_asn_gate_seen_families', 0)} families** → Eligible **{affinity.get('same_asn_eligible', 0)} / {affinity.get('same_asn_eligible_families', 0)}** → Fast **{affinity.get('same_asn_fast', 0)} / {affinity.get('same_asn_fast_families', 0)}** → Deep **{affinity.get('same_asn_deep', 0)} / {affinity.get('same_asn_deep_families', 0)}** → Reality PASS **{affinity.get('same_asn_reality_passed', 0)} / {affinity.get('same_asn_reality_passed_families', 0)}**",
+        f"- SAME_ASN final：SELECTABLE hostnames **{affinity.get('same_asn_selectable_hostnames', affinity.get('same_asn_selectable', 0))}** / families **{affinity.get('same_asn_selectable_families', 0)}** / unique endpoint sets **{affinity.get('same_asn_selectable_endpoints', 0)}**",
         "",
         "> 如果 SAME_ASN 最终为 0，报告必须能区分“被动来源没有发现”与“发现后在 Protocol/Policy/Reality 阶段被淘汰”，不能只显示最终没有同 ASN。",
         "",
-        "> Candidate confidence 回答“这个域名自身是否被充分验证”；Search confidence 回答“本轮搜索是否足够广”。Search LOW 不等于已经通过完整测试的候选本身不可靠。",
+        "> Candidate confidence 回答候选自身证据；Run Coverage 回答配置好的 bounded search 是否执行充分；Global Optimality 回答“是否有理由认为已接近整个候选空间的最优解”。命中 hard cap 或来源错误时，Global Optimality 不应轻易为 HIGH。",
         "",
         "## G. 自适应流水线统计",
         "",
         f"- Discovered / validated：**{counts.get('discovered', 0)}**",
-        f"- Eligibility：**{counts.get('eligibility_selected', 0)}** — Eligible {counts.get('eligible', 0)} / Review {counts.get('review_required', 0)} / Hard reject {counts.get('hard_rejected', 0)}",
+        f"- Eligibility：**{counts.get('eligibility_selected', 0)}** — Eligible {counts.get('eligible', 0)} / Review {counts.get('review_required', 0)} / Hard reject {counts.get('hard_rejected', 0)} / Baseline-only {counts.get('baseline_only', 0)}",
         f"- Fast benchmark：**{counts.get('fast_benchmarked', 0)}**",
         f"- Initial Deep：**{counts.get('deep_initial_benchmarked', counts.get('deep_benchmarked', 0))}**",
+        f"- Quality extension：Fast **{counts.get('fast_quality_extension_benchmarked', 0)}** / Deep **{counts.get('deep_quality_extension_benchmarked', 0)}**",
         f"- Deep refill：**{counts.get('deep_refill_benchmarked', 0)}** candidates / **{counts.get('deep_refill_rounds', 0)}** rounds",
         f"- Deep total：**{counts.get('deep_benchmarked', 0)}** — reused {counts.get('deep_reused_samples', 0)} / new {counts.get('deep_new_samples', 0)} samples",
         f"- Reality tested：**{counts.get('reality_tested', 0)}** — passed {counts.get('reality_passed', 0)}",
         f"- Adaptive stop reason：`{counts.get('adaptive_refill_stop_reason') or refill.get('stop_reason') or 'unknown'}`",
-        f"- Final selectable：**{counts.get('selectable', 0)} / {counts.get('selectable_target', 5)}**",
+        f"- Final selectable families：**{counts.get('selectable_families', counts.get('selectable', 0))} / {counts.get('selectable_target', 5)}**",
+        f"- Quality target met：`{counts.get('quality_target_met')}`",
         "",
     ])
 
@@ -228,7 +237,7 @@ def render_report(result: dict[str, Any]) -> str:
         lines.append(
             "| {rank} | `{host}` | `{final}` / `{policy}` | `{protocol}` | `{tlsver}` | `{reality}` | {p50} | {p95} | {mad} | `{network}` | `{front}` | `{asn}` | {improve} |".format(
                 rank=row.get("recommendation_rank", "?"),
-                host=row.get("hostname", "unknown"),
+                host=f"{row.get('hostname', 'unknown')} / {row.get('candidate_family') or row.get('hostname', 'unknown')}",
                 final=row.get("final_state", "unknown"),
                 policy=row.get("policy_eligibility", row.get("eligibility", "unknown")),
                 protocol=_protocol_label(row),
@@ -243,8 +252,9 @@ def render_report(result: dict[str, Any]) -> str:
                 improve=_fmt(row.get("incumbent_p50_improvement_pct"), "%"),
             )
         )
-    if len({r.get("hostname") for r in comparison if r.get("hostname")}) < 5:
-        lines.extend(["", "> `INSUFFICIENT_COMPARISON_DOMAINS`: 少于五个不同的已测域名；未伪造表格行。"])
+    families = {r.get("candidate_family") or r.get("hostname") for r in comparison if r.get("hostname")}
+    if len(families) < 5:
+        lines.extend(["", "> `INSUFFICIENT_COMPARISON_FAMILIES`: 少于五个不同 registrable-domain family 的已测结果；未伪造表格行。"])
 
     warnings = result.get("warnings") or []
     if warnings:

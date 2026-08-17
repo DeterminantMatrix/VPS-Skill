@@ -118,6 +118,10 @@ hosts:
         self.assertNotIn("v4.2 quick profile frozen", source)
         self.assertIn("profile frozen only after exact worker readiness", source)
 
+    def test_quality_below_target_is_normalized_by_v45_wrapper(self):
+        source = (ROOT / "scripts" / "controller_run.py").read_text(encoding="utf-8")
+        self.assertIn("TARGET_MEASURED_RUN_STATUS:SUCCESS_QUALITY_BELOW_TARGET", source)
+
 
 if __name__ == "__main__":
     unittest.main()

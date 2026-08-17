@@ -176,13 +176,13 @@ class WorkerFlowTests(unittest.TestCase):
              patch.object(target_worker, "reality_environment", return_value={"ready": True}), \
              patch.object(target_worker, "_run_reality_control", return_value={"passed": True, "dirty": False, "retried": False}), \
              patch.object(target_worker, "run_candidate", side_effect=fake_reality):
-            out = target_worker.run(job, {"protocol": 4, "implementation_version": "4.4", "manifest": "a" * 64})
+            out = target_worker.run(job, {"protocol": 4, "implementation_version": "4.5", "manifest": "a" * 64})
 
         self.assertEqual(out["status"], "SUCCESS")
         self.assertEqual(out["counts"]["selectable"], 5)
         self.assertEqual(out["counts"]["deep_refill_rounds"], 3)
         self.assertEqual(out["counts"]["deep_refill_benchmarked"], 6)
-        self.assertEqual(out["counts"]["adaptive_refill_stop_reason"], "SELECTABLE_TARGET_MET")
+        self.assertEqual(out["counts"]["adaptive_refill_stop_reason"], "PORTFOLIO_AND_QUALITY_TARGET_MET")
         self.assertEqual(out["counts"]["reality_tested"], 8)
 
     def test_low_gate_yield_triggers_bounded_discovery_extension(self):
@@ -223,7 +223,7 @@ class WorkerFlowTests(unittest.TestCase):
              patch.object(target_worker, "gate_candidate", side_effect=fake_gate), \
              patch.object(target_worker, "benchmark_candidates", return_value=[]), \
              patch.object(target_worker, "reality_environment", return_value={"ready": False, "reason": "fixture"}):
-            out = target_worker.run(job, {"protocol": 4, "implementation_version": "4.4", "manifest": "a" * 64})
+            out = target_worker.run(job, {"protocol": 4, "implementation_version": "4.5", "manifest": "a" * 64})
 
         self.assertEqual(ext_mock.call_count, 1)
         self.assertTrue(out["coverage"]["discovery_extension"]["triggered"])

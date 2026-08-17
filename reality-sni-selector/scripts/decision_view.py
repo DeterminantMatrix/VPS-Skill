@@ -8,12 +8,22 @@ from decision_grades import (
     _overall_confidence,
     _performance_grade,
     _protocol_grade,
-    _runtime_stability_grade,
-    _search_confidence,
+    _latency_consistency_grade,
+    _run_coverage_confidence,
+    _global_optimality_confidence,
     _tls_reliability_grade,
 )
 
-def _enrich_candidate(row: dict[str, Any], *, search_confidence: str, search_reasons: list[str], latency_target_ms: float, selectable: bool) -> dict[str, Any]:
+def _enrich_candidate(
+    row: dict[str, Any],
+    *,
+    search_confidence: str,
+    search_reasons: list[str],
+    latency_target_ms: float,
+    selectable: bool,
+    global_optimality_confidence: str | None = None,
+    global_optimality_reasons: list[str] | None = None,
+) -> dict[str, Any]:
     out = dict(row)
     final_state = "SELECTABLE" if selectable else str(out.get("final_state") or out.get("final") or "UNKNOWN")
     hard = list(out.get("hard_rejections") or [])
@@ -31,15 +41,16 @@ def _enrich_candidate(row: dict[str, Any], *, search_confidence: str, search_rea
     protocol_grade = _protocol_grade(out)
     tls_reliability = _tls_reliability_grade(out)
     performance = _performance_grade(out, latency_target_ms)
-    stability, stability_reasons = _runtime_stability_grade(out)
-    durability, durability_reasons = _durability_risk(out, stability)
+    latency_consistency, consistency_reasons = _latency_consistency_grade(out)
+    durability, durability_reasons = _durability_risk(out)
     affinity_grade, affinity_code = _network_affinity_grade(out)
     complete_deep = int(out.get("sample_count") or 0) >= 20
     candidate_confidence = "HIGH" if selectable and complete_deep and reality_pass and attempts >= 5 and passes >= 5 and float(out.get("success_rate") or 0.0) >= 0.95 else "MEDIUM" if complete_deep else "LOW"
-    overall = _overall_confidence(candidate_confidence, search_confidence)
-    if selectable and protocol_grade == "PASS" and candidate_confidence == "HIGH" and stability == "A" and performance in {"A+", "A"} and durability == "LOW":
+    global_conf = global_optimality_confidence or search_confidence
+    overall = _overall_confidence(candidate_confidence, global_conf)
+    if selectable and protocol_grade == "PASS" and candidate_confidence == "HIGH" and latency_consistency == "A" and performance in {"A+", "A"} and durability == "LOW":
         rec_grade, rec_label = "A+", "强烈推荐"
-    elif selectable and protocol_grade == "PASS" and candidate_confidence == "HIGH" and stability in {"A", "B"} and performance in {"A+", "A", "B"} and durability in {"LOW", "MEDIUM"}:
+    elif selectable and protocol_grade == "PASS" and candidate_confidence == "HIGH" and latency_consistency in {"A", "B"} and performance in {"A+", "A", "B"} and durability in {"LOW", "MEDIUM"}:
         rec_grade, rec_label = "A", "推荐"
     elif selectable:
         rec_grade, rec_label = "B+", "可选"
@@ -54,10 +65,11 @@ def _enrich_candidate(row: dict[str, Any], *, search_confidence: str, search_rea
         f"PROTOCOL_COMPLIANCE_{protocol_grade}",
         f"TLS_RELIABILITY_{tls_reliability}",
         f"PERFORMANCE_GRADE_{performance}",
-        f"RUNTIME_STABILITY_{stability}",
+        f"LATENCY_CONSISTENCY_{latency_consistency}",
         f"NETWORK_AFFINITY_{affinity_code}",
         f"DURABILITY_RISK_{durability}",
-        f"SEARCH_CONFIDENCE_{search_confidence}",
+        f"RUN_COVERAGE_CONFIDENCE_{search_confidence}",
+        f"GLOBAL_OPTIMALITY_CONFIDENCE_{global_conf}",
     ]
     out.update({
         "final_state": final_state,
@@ -71,8 +83,10 @@ def _enrich_candidate(row: dict[str, Any], *, search_confidence: str, search_rea
         "tls_reliability_grade": tls_reliability,
         "tls_grade": tls_reliability,
         "performance_grade": performance,
-        "runtime_stability_grade": stability,
-        "runtime_stability_reasons": stability_reasons,
+        "latency_consistency_grade": latency_consistency,
+        "latency_consistency_reasons": consistency_reasons,
+        "runtime_stability_grade": latency_consistency,
+        "runtime_stability_reasons": consistency_reasons,
         "network_affinity_grade": affinity_grade,
         "network_affinity_code": affinity_code,
         "durability_risk": durability,
@@ -80,6 +94,10 @@ def _enrich_candidate(row: dict[str, Any], *, search_confidence: str, search_rea
         "candidate_confidence": candidate_confidence,
         "search_confidence": search_confidence,
         "search_confidence_reasons": list(search_reasons),
+        "run_coverage_confidence": search_confidence,
+        "run_coverage_confidence_reasons": list(search_reasons),
+        "global_optimality_confidence": global_conf,
+        "global_optimality_confidence_reasons": list(global_optimality_reasons or []),
         "overall_recommendation_confidence": overall,
         "recommendation_grade": rec_grade,
         "recommendation_label": rec_label,
@@ -88,6 +106,7 @@ def _enrich_candidate(row: dict[str, Any], *, search_confidence: str, search_rea
     })
     out["model_commentary_facts"] = {
         "hostname": out.get("hostname"),
+        "candidate_family": out.get("candidate_family"),
         "final_state": final_state,
         "protocol_compliance": protocol_grade,
         "protocol_details": out.get("protocol_compliance") or {},
@@ -98,18 +117,18 @@ def _enrich_candidate(row: dict[str, Any], *, search_confidence: str, search_rea
         "p95_ms": out.get("p95_ms"),
         "mad_ms": out.get("mad_ms"),
         "performance": performance,
-        "runtime_stability": stability,
+        "latency_consistency": latency_consistency,
         "network_affinity": {"grade": affinity_grade, "code": affinity_code},
         "discovery_lanes": out.get("lanes") or [],
         "discovery_sources": out.get("sources") or [],
         "durability_risk": durability,
         "candidate_confidence": candidate_confidence,
-        "search_confidence": search_confidence,
+        "run_coverage_confidence": search_confidence,
+        "global_optimality_confidence": global_conf,
         "overall_confidence": overall,
         "incumbent_p50_improvement_pct": out.get("incumbent_p50_improvement_pct"),
     }
     return out
-
 
 def _ranking_rationale(rows: list[dict[str, Any]], index: int, equivalence_ms: float) -> tuple[str, str]:
     row = rows[index]
@@ -119,16 +138,16 @@ def _ranking_rationale(rows: list[dict[str, Any]], index: int, equivalence_ms: f
             diff = abs(float(row["p50_ms"]) - float(other["p50_ms"]))
             if diff <= equivalence_ms:
                 affinity = row.get("network_affinity_code") or "NETWORK_AFFINITY_UNKNOWN"
-                return "NEAR_TIE_LEADER", f"与第二名 P50 仅差 {diff:.3f} ms（≤{equivalence_ms:g} ms，视为近似持平）；名次主要由 P95、MAD、网络亲和性（{affinity}）、运行稳定性和长期风险信号打破平局。"
-        return "CLEAR_LEADER", "在完整 SELECTABLE 候选中综合 Policy、Reality、TLS、尾延迟和稳定性证据排名最高。"
+                return "NEAR_TIE_LEADER", f"与第二名 P50 仅差 {diff:.3f} ms（≤{equivalence_ms:g} ms，视为近似持平）；名次主要由 P95、MAD、网络亲和性（{affinity}）、延迟一致性和 operational-risk 信号打破平局。"
+        return "CLEAR_LEADER", "在完整 SELECTABLE 候选中综合 Policy、Reality、TLS、尾延迟和延迟一致性证据排名最高。"
     prev = rows[index - 1]
     if row.get("p50_ms") is not None and prev.get("p50_ms") is not None:
         diff = abs(float(row["p50_ms"]) - float(prev["p50_ms"]))
         if diff <= equivalence_ms:
             affinity = row.get("network_affinity_code") or "NETWORK_AFFINITY_UNKNOWN"
-            return "NEAR_TIE", f"与上一名 P50 仅差 {diff:.3f} ms（≤{equivalence_ms:g} ms），属于近似同级；排序主要参考 P95、MAD、网络亲和性（{affinity}）、运行稳定性和长期风险信号。"
+            return "NEAR_TIE", f"与上一名 P50 仅差 {diff:.3f} ms（≤{equivalence_ms:g} ms），属于近似同级；排序主要参考 P95、MAD、网络亲和性（{affinity}）、延迟一致性和 operational-risk 信号。"
         return "LATENCY_GAP", f"P50 与上一名相差 {diff:.3f} ms；在同样通过 Policy/Reality 的前提下综合表现略逊。"
-    return "RANKED_SELECTABLE", "完整通过 Policy、Benchmark 与 Reality；按综合性能和稳定性证据排序。"
+    return "RANKED_SELECTABLE", "完整通过 Policy、Benchmark 与 Reality；按综合性能和延迟一致性证据排序。"
 
 
 def _tradeoff(assessment: dict[str, Any], best: dict[str, Any] | None) -> tuple[str, str, dict[str, Any] | None]:
@@ -161,8 +180,44 @@ def build_decision_view(result: dict[str, Any]) -> dict[str, Any]:
     equivalence_ms = float(profile.get("p50_equivalence_ms") or 2.0)
     selectable_target = int(counts.get("selectable_target") or 5)
     raw_top = list(result.get("top5") or [])
-    search_conf, search_reasons = _search_confidence(coverage, len(raw_top), selectable_target)
-    top = [_enrich_candidate(row, search_confidence=search_conf, search_reasons=search_reasons, latency_target_ms=latency_target, selectable=True) for row in raw_top]
+    quality_raw = counts.get("quality_target_met")
+    if quality_raw is None:
+        quality_raw = (result.get("reality") or {}).get("quality_target", {}).get("met")
+    if quality_raw is None:
+        p50_limit = latency_target * float(profile.get("quality_p50_multiplier") or 1.25)
+        p95_limit = latency_target * float(profile.get("quality_p95_multiplier") or 1.60)
+        mad_limit = float(profile.get("quality_mad_max_ms") or 7.5)
+        quality_raw = any(
+            row.get("p50_ms") is not None and (
+                float(row["p50_ms"]) <= latency_target or (
+                    float(row["p50_ms"]) <= p50_limit
+                    and float(row.get("p95_ms") if row.get("p95_ms") is not None else row["p50_ms"]) <= p95_limit
+                    and float(row.get("mad_ms") if row.get("mad_ms") is not None else 0.0) <= mad_limit
+                    and float(row.get("success_rate") or 0.0) >= 0.95
+                )
+            )
+            for row in raw_top
+        )
+    quality_target_met = bool(quality_raw)
+    run_conf, run_reasons = _run_coverage_confidence(coverage, len(raw_top), selectable_target)
+    global_conf, global_reasons = _global_optimality_confidence(
+        coverage,
+        len(raw_top),
+        selectable_target,
+        quality_target_met=quality_target_met,
+    )
+    top = [
+        _enrich_candidate(
+            row,
+            search_confidence=run_conf,
+            search_reasons=run_reasons,
+            global_optimality_confidence=global_conf,
+            global_optimality_reasons=global_reasons,
+            latency_target_ms=latency_target,
+            selectable=True,
+        )
+        for row in raw_top
+    ]
     for idx, row in enumerate(top):
         code, text = _ranking_rationale(top, idx, equivalence_ms)
         row["recommendation_rank"] = idx + 1
@@ -175,7 +230,15 @@ def build_decision_view(result: dict[str, Any]) -> dict[str, Any]:
         if host in by_host:
             comparison.append(dict(by_host[host]))
         else:
-            comparison.append(_enrich_candidate(raw, search_confidence=search_conf, search_reasons=search_reasons, latency_target_ms=latency_target, selectable=False))
+            comparison.append(_enrich_candidate(
+                raw,
+                search_confidence=run_conf,
+                search_reasons=run_reasons,
+                global_optimality_confidence=global_conf,
+                global_optimality_reasons=global_reasons,
+                latency_target_ms=latency_target,
+                selectable=False,
+            ))
     assessment = dict(result.get("incumbent_assessment") or {})
     tradeoff_code, tradeoff_text, alt = _tradeoff(assessment, top[0] if top else None)
     assessment["tradeoff_code"] = tradeoff_code
@@ -184,16 +247,22 @@ def build_decision_view(result: dict[str, Any]) -> dict[str, Any]:
         assessment["best_alternative"] = alt
     best = top[0] if top else {}
     summary = {
-        "reporting_contract": "v4.4",
+        "reporting_contract": "v4.5",
         "recommended_sni": best.get("hostname"),
         "recommended_grade": best.get("recommendation_grade"),
         "recommended_label": best.get("recommendation_label"),
         "candidate_confidence": best.get("candidate_confidence", "LOW"),
-        "search_confidence": search_conf,
-        "search_confidence_reasons": search_reasons,
+        "search_confidence": run_conf,
+        "search_confidence_reasons": run_reasons,
+        "run_coverage_confidence": run_conf,
+        "run_coverage_confidence_reasons": run_reasons,
+        "global_optimality_confidence": global_conf,
+        "global_optimality_confidence_reasons": global_reasons,
         "overall_recommendation_confidence": best.get("overall_recommendation_confidence", "LOW"),
+        "quality_target_met": quality_target_met,
         "p50_equivalence_ms": equivalence_ms,
         "selectable_count": len(top),
+        "selectable_family_count": int(counts.get("selectable_families") or len(top)),
         "selectable_target": selectable_target,
         "coverage": coverage,
         "incumbent_tradeoff_code": tradeoff_code,

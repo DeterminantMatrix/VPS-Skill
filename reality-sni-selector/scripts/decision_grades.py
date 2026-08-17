@@ -2,7 +2,8 @@
 from __future__ import annotations
 from typing import Any
 
-def _search_confidence(coverage: dict[str, Any], selectable_count: int, selectable_target: int) -> tuple[str, list[str]]:
+def _run_coverage_confidence(coverage: dict[str, Any], selectable_count: int, selectable_target: int) -> tuple[str, list[str]]:
+    """Confidence that the configured bounded search ran with useful breadth/quality."""
     status = str(coverage.get("status") or "SPARSE")
     validated = int(coverage.get("validated") or 0)
     goal = max(1, int(coverage.get("goal") or 1))
@@ -27,6 +28,45 @@ def _search_confidence(coverage: dict[str, Any], selectable_count: int, selectab
         return "MEDIUM", reasons
     return "LOW", reasons
 
+
+def _global_optimality_confidence(
+    coverage: dict[str, Any],
+    selectable_count: int,
+    selectable_target: int,
+    *,
+    quality_target_met: bool,
+) -> tuple[str, list[str]]:
+    """Confidence that this bounded run is close to the best available choice.
+
+    This is intentionally stricter than run-coverage confidence. Hitting source
+    caps, source failures, weak lane diversity, or failing the quality target
+    prevents a HIGH global-optimality claim.
+    """
+    run_conf, reasons = _run_coverage_confidence(coverage, selectable_count, selectable_target)
+    saturation = coverage.get("saturation") or {}
+    source_errors = list(coverage.get("source_errors") or [])
+    lanes = list(coverage.get("active_discovery_lanes") or [])
+    reasons = list(reasons)
+    if saturation.get("any_cap_hit"):
+        reasons.append("SEARCH_CAP_SATURATED")
+    if source_errors:
+        reasons.append("SOURCE_ERRORS_PRESENT")
+    if len(lanes) < 3:
+        reasons.append("DISCOVERY_LANE_COVERAGE_INCOMPLETE")
+    if not quality_target_met:
+        reasons.append("QUALITY_TARGET_NOT_MET")
+    if run_conf == "LOW":
+        return "LOW", reasons
+    if run_conf == "HIGH" and not saturation.get("any_cap_hit") and not source_errors and len(lanes) >= 3 and quality_target_met:
+        return "HIGH", reasons
+    if selectable_count >= selectable_target:
+        return "MEDIUM", reasons
+    return "LOW" if run_conf == "MEDIUM" else "MEDIUM", reasons
+
+
+def _search_confidence(coverage: dict[str, Any], selectable_count: int, selectable_target: int) -> tuple[str, list[str]]:
+    """Compatibility alias for the v4.5 run-coverage confidence dimension."""
+    return _run_coverage_confidence(coverage, selectable_count, selectable_target)
 
 def _protocol_grade(row: dict[str, Any]) -> str:
     protocol = row.get("protocol_compliance") or {}
@@ -59,9 +99,8 @@ def _tls_reliability_grade(row: dict[str, Any]) -> str:
 
 
 def _tls_grade(row: dict[str, Any]) -> str:
-    """Compatibility alias; v4.4 reports this dimension as TLS reliability."""
+    """Compatibility alias; v4.5 reports this dimension as TLS reliability."""
     return _tls_reliability_grade(row)
-
 
 def _network_affinity_grade(row: dict[str, Any]) -> tuple[str, str]:
     affinity = row.get("network_affinity") or {}
@@ -85,41 +124,34 @@ def _performance_grade(row: dict[str, Any], latency_target_ms: float) -> str:
     return "C"
 
 
-def _runtime_stability_grade(row: dict[str, Any]) -> tuple[str, list[str]]:
-    success = float(row.get("success_rate") or 0.0)
+def _latency_consistency_grade(row: dict[str, Any]) -> tuple[str, list[str]]:
+    """Grade observed latency dispersion separately from transport reliability."""
     p50 = row.get("p50_ms")
     p95 = row.get("p95_ms")
     mad = row.get("mad_ms")
     spread = None if p50 is None or p95 is None else max(0.0, float(p95) - float(p50))
-    per_ip = [
-        float(info.get("success_rate"))
-        for info in (row.get("per_ip") or {}).values()
-        if (info.get("samples") or 0) >= 3 and info.get("success_rate") is not None
-    ]
-    min_ip = min(per_ip) if per_ip else None
-    volatile = bool((row.get("dns") or {}).get("volatile"))
     reasons: list[str] = []
-    if volatile:
-        reasons.append("DNS_VOLATILE")
-    if min_ip is not None and min_ip < 0.95:
-        reasons.append("PER_IP_SUCCESS_BELOW_95")
     if mad is not None and float(mad) > 4.0:
         reasons.append("MAD_ABOVE_4MS")
     if spread is not None and spread > 15.0:
         reasons.append("P95_SPREAD_ABOVE_15MS")
-    if success >= 0.99 and not volatile and (min_ip is None or min_ip >= 0.95) and (mad is None or float(mad) <= 4.0) and (spread is None or spread <= 15.0):
+    if (mad is None or float(mad) <= 4.0) and (spread is None or spread <= 15.0):
         return "A", reasons
-    if success >= 0.95 and not volatile and (min_ip is None or min_ip >= 0.90) and (mad is None or float(mad) <= 7.5) and (spread is None or spread <= 25.0):
+    if (mad is None or float(mad) <= 7.5) and (spread is None or spread <= 25.0):
         return "B", reasons
     return "C", reasons
 
 
-def _durability_risk(row: dict[str, Any], stability_grade: str) -> tuple[str, list[str]]:
-    """Operational heuristic based only on observed evidence.
+def _runtime_stability_grade(row: dict[str, Any]) -> tuple[str, list[str]]:
+    """Compatibility alias for old artifacts; use latency_consistency in v4.5."""
+    return _latency_consistency_grade(row)
 
-    Institutional origin is a useful provenance hint, not a requirement. v4.4
-    therefore does not penalize a clean general-regional or affinity candidate
-    merely because it was not discovered through an institution directory.
+def _durability_risk(row: dict[str, Any], _legacy_stability_grade: str | None = None) -> tuple[str, list[str]]:
+    """Operational heuristic independent of one-run latency dispersion.
+
+    Durability uses only current observable DNS/front-door/review/organization
+    evidence. P50/P95/MAD belong to performance and latency consistency, not to
+    a claim about future availability.
     """
     reasons: list[str] = []
     front = (row.get("front_door") or {}).get("class") or "UNKNOWN"
@@ -142,12 +174,9 @@ def _durability_risk(row: dict[str, Any], stability_grade: str) -> tuple[str, li
         reasons.append("NETWORK_AFFINITY_DISCOVERY_EVIDENCE")
     if volatile or review or front in {"UNKNOWN_EDGE_EVIDENCE", "UNKNOWN_TOOLING"}:
         return "HIGH", reasons
-    if stability_grade == "A" and front in {"DIRECT_CONFIRMED", "DIRECT_LIKELY"} and organizations:
+    if front in {"DIRECT_CONFIRMED", "DIRECT_LIKELY"} and organizations:
         return "LOW", reasons
-    if stability_grade == "A" and front in {"DIRECT_CONFIRMED", "DIRECT_LIKELY"}:
-        return "MEDIUM", reasons
     return "MEDIUM", reasons
-
 
 def _overall_confidence(candidate: str, search: str) -> str:
     if candidate == "HIGH" and search == "HIGH":

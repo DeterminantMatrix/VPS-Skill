@@ -157,7 +157,7 @@ class CoreTests(unittest.TestCase):
             guard = inventory_guard(p, "155.254.127.55")
         job = build_job(guard, [], "old.example", "explicit", worker_manifest="a" * 64)
         validate_job(json.loads(json.dumps(job)))
-        self.assertEqual((job["implementation_version"], job["profile"]["coverage_goal"], job["limits"]["eligibility_pool"], job["limits"]["fast_pool"], job["limits"]["deep_pool"], job["limits"]["deep_pool_cap"], job["limits"]["deep_refill_batch"], job["limits"]["reality_candidate_cap"]), ("4.4", 200, 80, 36, 10, 18, 4, 16))
+        self.assertEqual((job["implementation_version"], job["profile"]["coverage_goal"], job["limits"]["eligibility_pool"], job["limits"]["fast_pool"], job["limits"]["deep_pool"], job["limits"]["deep_pool_cap"], job["limits"]["deep_refill_batch"], job["limits"]["reality_candidate_cap"]), ("4.5", 200, 80, 36, 10, 22, 4, 20))
 
     def test_quick_profile_freezes_near_tie_window(self):
         job = build_job(self._guard(), [], "old.example", "explicit", worker_manifest="a" * 64)
@@ -208,7 +208,7 @@ class CoreTests(unittest.TestCase):
         stale = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.2", "manifest": "b" * 64}}).encode()
         with patch.object(controller_run.subprocess, "Popen", return_value=P(stale)):
             self.assertEqual(controller_run.run_remote("best-vm-us", job, 60)[1], "TARGET_WORKER_VERSION_MISMATCH")
-        wrong = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.4", "manifest": "b" * 64}}).encode()
+        wrong = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.5", "manifest": "b" * 64}}).encode()
         with patch.object(controller_run.subprocess, "Popen", return_value=P(wrong)):
             self.assertEqual(controller_run.run_remote("best-vm-us", job, 60)[1], "TARGET_WORKER_BUILD_MISMATCH")
 

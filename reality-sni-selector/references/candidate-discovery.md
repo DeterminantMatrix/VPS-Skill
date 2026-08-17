@@ -1,78 +1,81 @@
-# Candidate discovery v4.4
+# Candidate discovery v4.5
 
-Run every discovery query and hostname/DNS validation from the selected target VPS. Discovery produces candidates only; it never makes a domain eligible by itself.
+Run every discovery query and hostname/DNS validation from the selected target VPS. Discovery only creates candidates; Protocol / Safety / Reliability / Reality decide eligibility.
 
 ## Multi-lane model
 
 Use four complementary lanes:
 
-1. **General Regional** — query nearby OpenStreetMap features that explicitly publish `website`, `contact:website`, or `operator:website`. This lane includes ordinary businesses, organizations, media, service sites, community sites, and institutions. Institution status is not required.
-2. **Network Affinity** — use the inventory ingress IPv4 with RIPEstat routing data to identify the containing prefix / announcing ASN, then perform a tiny deterministic sample of Shodan InternetDB passive IP lookups. Extract published hostnames only. Never open TCP connections to sampled addresses and never sweep an ASN/CIDR.
-3. **Institutional preference** — retain Wikidata/OpenAlex and institution-tagged OSM records as a high-quality preference lane. Institutional provenance may help prioritization/interpretation but is never an eligibility requirement.
-4. **Passive Expansion** — use bounded CT expansion under registrable domains already found by any lane, not only institutional roots.
+1. **General Regional** — nearby public website metadata without requiring an institution class.
+2. **Network Affinity** — inventory ingress IPv4 -> RIPEstat routing/ASN/prefix metadata -> tiny deterministic Shodan InternetDB passive IP sample -> published hostnames only.
+3. **Institutional preference** — Wikidata/OpenAlex plus institution-tagged OSM as a high-quality preference lane, never a prerequisite.
+4. **Passive Expansion** — bounded CT expansion under registrable domains found by any lane.
 
-Fixed regional seed files and the incumbent remain valid inputs outside these lanes.
+Fixed regional seed files and the incumbent remain valid inputs outside the four lanes.
 
 ## Safety boundary
 
-- Never scan raw CIDRs, arbitrary IP ranges, ports, or addresses discovered from BGP data.
+- Never scan raw CIDRs, ASNs, arbitrary IP ranges, ports, or BGP-derived addresses.
 - RIPEstat is routing metadata only.
-- InternetDB requests are passive third-party lookups; QUICK uses a fixed small IP sample and no candidate TCP/TLS traffic is sent to those sampled IPs.
-- Candidate TCP/TLS/HEAD/Reality measurements still begin only after a hostname resolves through normal candidate validation.
-- Keep transient source retry bounded to one short retry for timeout, HTTP 429, and 5xx failures.
+- InternetDB requests are passive third-party metadata lookups. Do not open candidate TCP/TLS connections to sampled addresses until a published hostname is discovered and passes normal hostname/DNS validation.
+- Retry a transient source timeout / HTTP 429 / 5xx at most once.
 
-## QUICK profile
+## Regional metadata hygiene
 
-Keep overall runtime close to v4.3.5 while reallocating discovery breadth:
+Regional/Institutional directories can contain social-profile or aggregator URLs instead of a site's own domain. Filter common third-party profile/platform bases (for example Facebook, Instagram, LinkedIn, YouTube, TikTok, X/Twitter, Linktree and travel aggregators) **only when they arrive as Regional/Institutional metadata**.
+
+This is a discovery-noise filter, not a REALITY hard policy. An explicit seed or an independently discovered Network-Affinity hostname may still be evaluated normally.
+
+## Lane-aware bounded selection
+
+Global caps must not let a large General Regional query starve smaller lanes. Before applying source-record and validated-hostname hard caps:
+
+- preserve bounded reserve opportunity for Network Affinity, Institutional, General Regional, and Passive Expansion;
+- prefer distinct registrable-domain families inside each reserve;
+- let unused reserve flow back to deterministic common fill;
+- record requested/actual reserve counts and whether the global cap was hit.
+
+QUICK defaults:
 
 - source pool cap: 520;
 - validated hostname cap: 240;
-- nominal validated breadth goal: 200;
-- effective Protocol/Policy-eligible survivor goal: 15;
-- General Regional OSM record cap: 1,100;
+- nominal breadth goal: 200;
+- effective Protocol/Policy `ELIGIBLE` survivor goal: 15;
+- General Regional ingest cap: 340 source records before common fill;
 - Network Affinity: at most 4 announced prefixes considered and 24 passive InternetDB IP lookups;
 - eligibility pool: 80.
 
-`coverage.status` is no longer derived from hostname count alone. Preserve:
+AUDIT uses broader bounded caps: source 1,200, validated 600, breadth goal 400, survivor goal 25, up to 6 prefixes and 48 passive lookups.
 
-- `breadth_status`: validated-hostname breadth;
-- `quality_status`: number of effective `ELIGIBLE` survivors versus the profile goal;
-- `active_discovery_lanes` and per-lane counts;
-- combined `status`: `GOOD`, `LIMITED`, or `SPARSE`.
+## CT behavior
 
-A large institutional-only list is not sufficient for `GOOD` multi-lane coverage.
+Do not let an early General Regional success suppress all Passive Expansion. When the primary source-stop target is already met, retain a very small bounded CT base pass so the passive lane has representation. Full CT remains backfill/extension rather than an unbounded crawl.
 
-## Lane reserves
+## Coverage and saturation
 
-Discovery provenance must influence measurement opportunity without bypassing gates.
+Report separately:
 
-QUICK reserves bounded eligibility-pool space for Network Affinity, General Regional, and Institutional lanes. Fast/initial Deep also reserve a small number of slots for measured network-affinity candidates. These are opportunity reserves only:
+- `breadth_status`: validated count versus breadth goal;
+- `quality_status`: effective `ELIGIBLE` count versus survivor goal;
+- `active_discovery_lanes`, `lane_counts`, `source_counts`;
+- `saturation.source_pool_cap_hit`, `saturation.validated_cap_hit`, eligibility/extension cap hits;
+- safe source-error subtypes;
+- combined `status`.
 
-- TLS1.3/h2/certificate/redirect minimums still apply;
-- CDN/shared-platform hard policy still applies;
-- reliability still applies;
-- Reality 5/5 still applies.
+A run can execute its configured search well while still being unable to claim global optimality. Cap saturation and source failures therefore feed Global Optimality Confidence separately from Run Coverage Confidence.
 
-Same-ASN never rescues an otherwise rejected candidate and does not override materially worse tail latency/stability.
+## Quality-driven extension
+
+If the initial bounded universe has too few effective survivors **or** the initial Deep set has no candidate meeting the frozen quality target, permit one bounded discovery extension. Probe only a capped set of newly validated candidates and never restart/retest the original universe.
+
+The extension is a quality/coverage recovery path, not an excuse to grow an unlimited search.
 
 ## Network Affinity funnel
 
-Record enough evidence to explain why the final Top 5 does or does not contain SAME_ASN choices:
+Record both hostname and registrable-family counts through:
 
 ```text
-affinity hostnames discovered
--> validated
--> SAME_ASN seen at Gate
--> SAME_ASN eligible
--> Fast
--> Deep
--> Reality tested
--> Reality passed
--> SELECTABLE
+discovered -> validated -> SAME_ASN Gate -> Eligible -> Fast -> Deep -> Reality PASS -> SELECTABLE
 ```
 
-If no SAME_ASN candidate survives, distinguish "none discovered" from "discovered but rejected".
-
-## AUDIT profile
-
-Use the same multi-lane architecture with broader fixed caps: source 1,200, validated 600, nominal breadth goal 400, effective eligible survivor goal 25, up to 6 announced prefixes considered, and 48 passive InternetDB IP lookups. AUDIT remains bounded and does not perform raw network scans.
+Also report unique endpoint/IP-set count at the final stage. If no SAME_ASN family survives, distinguish "none discovered" from "discovered but rejected later".

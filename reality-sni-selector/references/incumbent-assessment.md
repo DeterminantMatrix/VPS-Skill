@@ -33,7 +33,7 @@ A lower-priority performance advantage never overrides a higher-priority safety/
 
 Always include machine-readable reasons and the best fully selectable alternative when one exists.
 
-## v4.4 performance tradeoff explanation
+## v4.5 performance tradeoff explanation
 
 Always emit `tradeoff_code` and `tradeoff_text` when a recommended selectable alternative exists. The text must explicitly state whether the current SNI is faster, slower, or near-tied with the recommendation.
 
