@@ -1,12 +1,12 @@
-# Target worker installation / automatic lifecycle v4.3.5
+# Target worker installation / automatic lifecycle v4.4
 
-Normal v4.3.5 selection owns readiness of its reviewed fixed worker. Manual predeployment is no longer required when the existing SSH alias can write the fixed paths.
+Normal v4.4 selection owns readiness of its reviewed fixed worker. Manual predeployment is no longer required when the existing SSH alias can write the fixed paths.
 
 See `worker-lifecycle.md` for the automatic sequence.
 
 ## Managed file set
 
-The six manifest-covered worker files are installed together under `/opt/reality-sni-selector/`:
+The six manifest-covered worker Python files are installed together under `/opt/reality-sni-selector/`:
 
 ```text
 common.py
@@ -16,6 +16,16 @@ benchmark.py
 reality_selftest.py
 target_worker.py
 ```
+
+For connector-safe publication, v4.4 also installs three fixed auxiliary source payloads in the same managed directory:
+
+```text
+target_discovery.py.gz
+target_probe.py.gz
+target_worker.py.gz
+```
+
+The three small Python entry files verify the decompressed source SHA-256 before execution. The bootstrap independently verifies the gzip payload SHA-256 before activation, so these auxiliary files cannot bypass the six-file manifest trust chain.
 
 The managed directory also contains `.managed.json` with protocol/version/manifest/wrapper-hash metadata.
 

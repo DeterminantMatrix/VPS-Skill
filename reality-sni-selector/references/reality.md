@@ -1,4 +1,4 @@
-# LOCAL_REALITY_INTEGRATION_TEST v4.3.5
+# LOCAL_REALITY_INTEGRATION_TEST v4.4
 
 This stage validates the local sing-box server/client fixture on the target VPS. It is not an end-to-end test from a real remote client.
 

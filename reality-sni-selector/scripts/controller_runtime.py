@@ -368,6 +368,8 @@ def main() -> int:
     mapping = {
         "target-frozen-run.json": result.get("frozen_run", {}),
         "target-preflight.json": result.get("preflight", {}),
+        "candidate-discovery.json": result.get("candidate_discovery", {}),
+        "network-affinity-search.json": result.get("network_affinity_search", {}),
         "regional-candidates.json": result.get("regional_candidates", {}),
         "candidates.json": result.get("candidates", []),
         "probe-pool.json": result.get("probe_pool", []),
@@ -377,7 +379,7 @@ def main() -> int:
         "reality-results.json": result.get("reality", {}),
         "comparison.json": result.get("comparison", []),
         "incumbent-assessment.json": result.get("incumbent_assessment", {}),
-        "top5.json": {"status": result.get("status"), "coverage": result.get("coverage", {}), "top5": result.get("top5", []), "preliminary_top5": result.get("preliminary_top5", []), "comparison": result.get("comparison", [])},
+        "top5.json": {"status": result.get("status"), "coverage": result.get("coverage", {}), "network_affinity_search": result.get("network_affinity_search", {}), "top5": result.get("top5", []), "preliminary_top5": result.get("preliminary_top5", []), "comparison": result.get("comparison", [])},
         "run-metadata.json": {"status": result.get("status"), "worker": result.get("worker", {}), "guard": guard, "controller": controller_meta, "worker_lifecycle": worker_lifecycle, "controller_frozen_run": job, "target_frozen_run": result.get("frozen_run", {}), "coverage": result.get("coverage", {}), "counts": result.get("counts", {}), "warnings": result.get("warnings", [])},
     }
     for name, payload in mapping.items():

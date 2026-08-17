@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""v4.3.5 entrypoint: stable controller runtime plus deterministic decision postprocessing."""
+"""v4.4 entrypoint: stable controller runtime plus deterministic decision postprocessing."""
 from __future__ import annotations
 
 import contextlib
@@ -33,7 +33,7 @@ def run_remote(alias: str, job: dict[str, Any], timeout: int):
 
 def main() -> int:
     # Capture only the controller's local stdout so we can locate its dedicated run directory,
-    # then replay it verbatim to the caller before deterministic v4.3.5 postprocessing.
+    # then replay it verbatim to the caller before deterministic v4.4 postprocessing.
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
         rc = _runtime.main()

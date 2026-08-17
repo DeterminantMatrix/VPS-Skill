@@ -119,6 +119,26 @@ class CoreTests(unittest.TestCase):
                 target_discovery._fetch_json_one_retry("https://example.invalid")
         self.assertEqual(mocked.call_count, 1)
 
+
+    def test_general_osm_lane_is_not_forced_institutional(self):
+        self.assertEqual(target_discovery._osm_lane({"shop": "books"}), "general_regional")
+        self.assertEqual(target_discovery._osm_lane({"amenity": "university"}), "institutional")
+
+    def test_affinity_passive_sampling_is_bounded(self):
+        sampled = target_discovery.sample_affinity_ips("23.19.228.207", "23.19.228.0/24", ["23.19.228.0/24", "23.19.229.0/24"], 12)
+        self.assertLessEqual(len(sampled), 12)
+        self.assertNotIn("23.19.228.207", sampled)
+        self.assertTrue(all(target_discovery.is_public_ipv4(ip) for ip in sampled))
+
+    def test_probe_pool_reserves_affinity_lane(self):
+        candidates = [
+            {"hostname": "old.example", "sources": ["incumbent"], "lanes": ["incumbent"], "organizations": [], "initial_ipv4": ["8.8.8.8"]},
+            {"hostname": "aff.example", "sources": ["shodan_affinity"], "lanes": ["network_affinity"], "organizations": [], "initial_ipv4": ["1.1.1.1"]},
+            {"hostname": "gen.example", "sources": ["osm_general"], "lanes": ["general_regional"], "organizations": [], "initial_ipv4": ["9.9.9.9"]},
+        ]
+        selected, _ = select_probe_pool(candidates, "old.example", 2, {"network_affinity": 1})
+        self.assertEqual({row["hostname"] for row in selected}, {"old.example", "aff.example"})
+
     def test_fixed_elf_precedes_path_wrapper(self):
         with tempfile.TemporaryDirectory() as td:
             binary = Path(td) / "sing-box"
@@ -137,7 +157,7 @@ class CoreTests(unittest.TestCase):
             guard = inventory_guard(p, "155.254.127.55")
         job = build_job(guard, [], "old.example", "explicit", worker_manifest="a" * 64)
         validate_job(json.loads(json.dumps(job)))
-        self.assertEqual((job["implementation_version"], job["profile"]["coverage_goal"], job["limits"]["eligibility_pool"], job["limits"]["fast_pool"], job["limits"]["deep_pool"], job["limits"]["deep_pool_cap"], job["limits"]["deep_refill_batch"], job["limits"]["reality_candidate_cap"]), ("4.3.5", 200, 80, 36, 10, 18, 4, 16))
+        self.assertEqual((job["implementation_version"], job["profile"]["coverage_goal"], job["limits"]["eligibility_pool"], job["limits"]["fast_pool"], job["limits"]["deep_pool"], job["limits"]["deep_pool_cap"], job["limits"]["deep_refill_batch"], job["limits"]["reality_candidate_cap"]), ("4.4", 200, 80, 36, 10, 18, 4, 16))
 
     def test_quick_profile_freezes_near_tie_window(self):
         job = build_job(self._guard(), [], "old.example", "explicit", worker_manifest="a" * 64)
@@ -188,7 +208,7 @@ class CoreTests(unittest.TestCase):
         stale = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.2", "manifest": "b" * 64}}).encode()
         with patch.object(controller_run.subprocess, "Popen", return_value=P(stale)):
             self.assertEqual(controller_run.run_remote("best-vm-us", job, 60)[1], "TARGET_WORKER_VERSION_MISMATCH")
-        wrong = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.3.5", "manifest": "b" * 64}}).encode()
+        wrong = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.4", "manifest": "b" * 64}}).encode()
         with patch.object(controller_run.subprocess, "Popen", return_value=P(wrong)):
             self.assertEqual(controller_run.run_remote("best-vm-us", job, 60)[1], "TARGET_WORKER_BUILD_MISMATCH")
 

@@ -1,4 +1,4 @@
-# REALITY target evaluation model v4.3.5
+# REALITY target evaluation model v4.4
 
 This Skill separates upstream REALITY target requirements from its own conservative operational policy. Do not describe project-specific heuristics as protocol requirements.
 

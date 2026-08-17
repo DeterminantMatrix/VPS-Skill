@@ -1,4 +1,4 @@
-# Architecture v4.3.5
+# Architecture v4.4
 
 ## Control plane vs measurement plane
 
@@ -43,7 +43,7 @@ The job freezes:
 
 - `schema_version: 4`
 - `worker_protocol: 4`
-- `implementation_version: 4.3.5`
+- `implementation_version: 4.4`
 - `expected_worker_manifest`
 
 The readiness probe additionally verifies the reviewed wrapper SHA-256. The measurement worker repeats protocol/version/manifest validation before candidate network traffic.
@@ -57,7 +57,7 @@ The readiness probe additionally verifies the reviewed wrapper SHA-256. The meas
 | freeze job/manifest | yes | no |
 | egress/location | no | yes |
 | incumbent config discovery | no | yes |
-| regional/source discovery | no | yes |
+| multi-lane General Regional / Network Affinity / Institutional / passive discovery | no | yes |
 | candidate DNS/TLS/HEAD/platform | no | yes |
 | fast/deep benchmark | no | yes |
 | local Reality integration | no | yes |
@@ -65,6 +65,10 @@ The readiness probe additionally verifies the reviewed wrapper SHA-256. The meas
 | final artifact rendering | yes | no |
 
 
-## Adaptive selection and decision layer v4.3.5
+## Multi-lane discovery v4.4
+
+The target worker treats institutional websites as one preference lane rather than the candidate universe. General Regional OSM website metadata, Network Affinity routing/passive data, Institutional metadata, and cross-lane CT expansion are combined before DNS validation. The built-in affinity lane uses routing metadata plus bounded third-party passive IP lookups only; it never actively sweeps BGP prefixes.
+
+## Adaptive selection and decision layer v4.4
 
 The target worker owns adaptive measurement: initial Deep, Reality, and bounded Deep refill from already-Fast-measured eligible survivors until five SELECTABLE results are found or fixed caps are exhausted. The controller deterministically derives decision dimensions/ranking rationale from target-measured evidence and renders `decision-summary.json` and modular `report.md`. The calling model may explain those fields in Chinese, but must follow `reporting.md` and may not replace measured evidence with outside assumptions.

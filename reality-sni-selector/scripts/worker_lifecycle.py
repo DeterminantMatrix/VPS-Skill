@@ -110,8 +110,8 @@ def build_payload_archive(scripts_dir: Path, output_path: Path) -> dict[str, str
     wrapper_data = wrapper.read_bytes()
     wrapper_sha = hashlib.sha256(wrapper_data).hexdigest()
     with tarfile.open(output_path, "w:gz") as tf:
-        from common import TARGET_WORKER_FILES
-        for name in TARGET_WORKER_FILES:
+        from common import TARGET_WORKER_AUX_FILES, TARGET_WORKER_FILES
+        for name in (*TARGET_WORKER_FILES, *TARGET_WORKER_AUX_FILES):
             data = (scripts_dir / name).read_bytes()
             _add_tar_bytes(tf, name, data, 0o644)
         _add_tar_bytes(tf, WRAPPER_NAME, wrapper_data, 0o755)

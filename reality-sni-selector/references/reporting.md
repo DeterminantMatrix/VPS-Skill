@@ -1,4 +1,4 @@
-# Final reporting contract v4.3.5
+# Final reporting contract v4.4
 
 The user-facing answer is a decision aid, not a compressed benchmark log. Read `report.md`, `decision-summary.json`, `top5.json`, and `incumbent-assessment.json` before answering.
 
@@ -11,7 +11,7 @@ Use this order and do not silently omit modules:
 3. **Top 5 核心决策表** — show all five when five `SELECTABLE` exist; never compress to three.
 4. **候选详细卡与模型评语** — one card per displayed candidate with protocol evidence, safety/policy, Reality 5/5, TLS reliability, P50/P95/MAD, runtime stability, Network Affinity, operational-risk heuristic, confidence, and ranking rationale.
 5. **怎么选** — one default choice, best backup, lowest-P95 option, best Network-Affinity option when known, and explicit partial-choice warning when fewer than five exist.
-6. **搜索质量** — coverage status/goal, search confidence, source failures, and the distinction between candidate confidence and search confidence.
+6. **搜索质量与 Network Affinity** — validated breadth, effective eligible-survivor quality, active discovery lanes, source failures, target ASN/prefix, and the SAME_ASN discovery-to-selection funnel; explain the distinction between candidate confidence and search confidence.
 7. **自适应流水线统计** — initial Deep, refill rounds/candidates, total Deep, Reality tested/passed, adaptive stop reason, final selectable count.
 8. **全部比较证据** — audit table; non-SELECTABLE rows must never be presented as recommendations.
 
@@ -20,7 +20,7 @@ Use this order and do not silently omit modules:
 Include at least:
 
 - rank and SNI;
-- recommendation grade/label;
+- recommendation tier plus grade/label;
 - REALITY Protocol state;
 - observed TLS version and ALPN;
 - Policy grade and final state;
@@ -44,3 +44,8 @@ Never invent historical uptime, organizational reputation, future DNS/hosting st
 ## Near-tie rule
 
 Within the frozen `p50_equivalence_ms` window (default 2 ms), do not claim a tiny P50 difference is meaningful. Explain ranking through P95, MAD, Network Affinity, runtime stability, front-door evidence, and operational-risk signals.
+
+
+## Discovery-provenance rule
+
+Do not describe Institutional provenance as a REALITY eligibility requirement. Display discovery lanes/sources when useful. If no SAME_ASN candidate is selectable, explain whether the affinity lane found no hostname or whether discovered SAME_ASN candidates were eliminated later by Protocol/Policy/Reality evidence.

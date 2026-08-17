@@ -100,14 +100,15 @@ def render_report(result: dict[str, Any]) -> str:
         "",
         "有 5 个 `SELECTABLE` 时必须完整显示 5 个；不足 5 个时只显示真实通过者，不伪造候选。",
         "",
-        "| # | SNI | 推荐 | Protocol | TLS / ALPN | Policy | Reality | P50 / P95 | TLS可靠性 / 稳定性 | Network | Front Door | 风险 | 综合置信度 |",
-        "|---:|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| # | SNI | 梯队 | 推荐 | Protocol | TLS / ALPN | Policy | Reality | P50 / P95 | TLS可靠性 / 稳定性 | Network | Front Door | 风险 | 综合置信度 |",
+        "|---:|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ])
     for row in top:
         lines.append(
-            "| {rank} | `{host}` | **{grade} {label}** | `{protocol}` | `{tlsver}` | `{policy}` | `{reality}` | {p50} / {p95} | `{tls_rel}` / `{stability}` | `{network}` | `{front}` | `{risk}` | `{confidence}` |".format(
+            "| {rank} | `{host}` | `{tier}` | **{grade} {label}** | `{protocol}` | `{tlsver}` | `{policy}` | `{reality}` | {p50} / {p95} | `{tls_rel}` / `{stability}` | `{network}` | `{front}` | `{risk}` | `{confidence}` |".format(
                 rank=row.get("recommendation_rank", "?"),
                 host=row.get("hostname", "unknown"),
+                tier=row.get("recommendation_tier", "unknown"),
                 grade=row.get("recommendation_grade", "?"),
                 label=row.get("recommendation_label", ""),
                 protocol=_protocol_label(row),
@@ -144,6 +145,7 @@ def render_report(result: dict[str, Any]) -> str:
             f"- **Reliability**：TLS `{_pct(row.get('success_rate'))}` / grade `{row.get('tls_reliability_grade', row.get('tls_grade', 'unknown'))}`；运行稳定性 `{row.get('runtime_stability_grade', 'unknown')}`。",
             f"- **Performance**：P50 `{_fmt(row.get('p50_ms'), ' ms')}`；P95 `{_fmt(row.get('p95_ms'), ' ms')}`；MAD `{_fmt(row.get('mad_ms'), ' ms')}`；等级 `{row.get('performance_grade', 'unknown')}`。",
             f"- **Network affinity**：`{_network_affinity(row)}`。",
+            f"- **Discovery provenance**：lanes `{row.get('lanes') or []}`；sources `{row.get('sources') or []}`。",
             f"- **Operational risk**：`{row.get('durability_risk', 'unknown')}`；这是基于本轮可观察证据的启发式风险，不代表未来可用性保证。",
             f"- **与当前 SNI**：{relation}。",
             f"- **排名理由**：{row.get('ranking_rationale') or '无'}",
@@ -164,14 +166,32 @@ def render_report(result: dict[str, Any]) -> str:
         f"- **如果更重视网络亲和性**：`{(best_network or {}).get('hostname', '无')}`（`{_network_affinity(best_network) if best_network else 'unknown'}`）。",
         f"- **本轮可选数量**：{len(top)} / {counts.get('selectable_target', 5)}。",
         "",
-        "## F. 搜索质量与范围",
+        "## F. 搜索质量、来源覆盖与 Network Affinity",
         "",
-        f"- Target egress IPv4：`{preflight.get('observed_egress_ip') or 'unknown'}`",
+        f"- Target ingress IPv4：`{(frozen.get('target') or {}).get('inventory_ipv4') or 'unknown'}`；egress IPv4：`{preflight.get('observed_egress_ip') or 'unknown'}`",
         f"- Region：`{frozen.get('region') or 'unknown'}`",
         f"- Profile：`{coverage.get('profile') or (frozen.get('profile') or {}).get('run_mode') or 'unknown'}`",
-        f"- Coverage：`{coverage.get('status', 'unknown')}` — **{coverage.get('validated', 0)} / {coverage.get('goal', 'unknown')}**",
-        f"- Selection maturity：`{coverage.get('selection_maturity', 'unknown')}`",
+        f"- Validated breadth：`{coverage.get('breadth_status', coverage.get('status', 'unknown'))}` — **{coverage.get('validated', 0)} / {coverage.get('goal', 'unknown')}**",
+        f"- Effective eligible quality：`{coverage.get('quality_status', 'unknown')}` — **{coverage.get('effective_eligible', 0)} / {coverage.get('eligible_goal', 'unknown')}**",
+        f"- Combined coverage：`{coverage.get('status', 'unknown')}`；Selection maturity：`{coverage.get('selection_maturity', 'unknown')}`",
+        f"- Active discovery lanes：`{coverage.get('active_discovery_lanes') or []}`",
+        f"- Validated lane counts：`{coverage.get('lane_counts') or {}}`",
         f"- Search confidence：**{_confidence_zh(decision.get('search_confidence'))}**",
+        "",
+        "> Institution 是高质量偏好来源，不是候选资格条件。v4.4 同时使用 General Regional、Network Affinity、Institutional 与跨通道 Passive Expansion；最终资格仍由 Protocol / Safety / Reliability / Reality 决定。",
+        "",
+    ])
+
+    affinity = result.get("network_affinity_search") or {}
+    lines.extend([
+        "### Network Affinity Search funnel",
+        "",
+        f"- Target ASN / prefix：`{affinity.get('target_asn') or 'unknown'}` / `{affinity.get('target_prefix') or 'unknown'}`",
+        f"- Discovery method：`{affinity.get('method') or 'unknown'}`；active scan：`{affinity.get('active_scan')}`",
+        f"- Passive IP sample：**{affinity.get('passive_ips_sampled', 0)}**；affinity hostnames discovered：**{affinity.get('affinity_hostnames_discovered', 0)}**；validated：**{affinity.get('affinity_lane_validated', 0)}**",
+        f"- SAME_ASN：Gate seen **{affinity.get('same_asn_gate_seen', 0)}** → Eligible **{affinity.get('same_asn_eligible', 0)}** → Fast **{affinity.get('same_asn_fast', 0)}** → Deep **{affinity.get('same_asn_deep', 0)}** → Reality tested **{affinity.get('same_asn_reality_tested', 0)}** → PASS **{affinity.get('same_asn_reality_passed', 0)}** → SELECTABLE **{affinity.get('same_asn_selectable', 0)}**",
+        "",
+        "> 如果 SAME_ASN 最终为 0，报告必须能区分“被动来源没有发现”与“发现后在 Protocol/Policy/Reality 阶段被淘汰”，不能只显示最终没有同 ASN。",
         "",
         "> Candidate confidence 回答“这个域名自身是否被充分验证”；Search confidence 回答“本轮搜索是否足够广”。Search LOW 不等于已经通过完整测试的候选本身不可靠。",
         "",

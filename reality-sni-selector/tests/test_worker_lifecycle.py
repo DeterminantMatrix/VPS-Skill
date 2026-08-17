@@ -35,7 +35,7 @@ class WorkerLifecycleTests(unittest.TestCase):
             with tarfile.open(archive, "r:gz") as tf:
                 self.assertEqual(
                     set(tf.getnames()),
-                    set(worker_bootstrap.TARGET_FILES) | {worker_bootstrap.WRAPPER_NAME},
+                    set(worker_bootstrap.TARGET_FILES) | set(worker_bootstrap.AUX_FILES) | {worker_bootstrap.WRAPPER_NAME},
                 )
 
     def test_install_absent_worker_creates_managed_marker(self):
@@ -58,6 +58,7 @@ class WorkerLifecycleTests(unittest.TestCase):
             self.assertEqual(marker["managed_by"], "reality-sni-selector")
             self.assertEqual(marker["manifest"], hashes["manifest"])
             self.assertEqual(compute_worker_manifest(install_dir), hashes["manifest"])
+            self.assertTrue(worker_bootstrap.auxiliary_payloads_ok(install_dir))
             self.assertTrue(os.access(wrapper, os.X_OK))
 
     def test_recognized_legacy_worker_is_upgraded_with_backup(self):

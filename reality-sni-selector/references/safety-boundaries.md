@@ -28,7 +28,7 @@
 
 ## Worker contract
 
-Freeze only after worker identity matches protocol 4, implementation 4.3.5, the expected six-file manifest, and reviewed wrapper hash. Unknown existing worker paths fail with `WORKER_PATH_CONFLICT`. The measurement command remains fixed at `/usr/local/bin/reality-sni-target-worker run`.
+Freeze only after worker identity matches protocol 4, implementation 4.4, the expected six-file manifest, and reviewed wrapper hash. Unknown existing worker paths fail with `WORKER_PATH_CONFLICT`. The measurement command remains fixed at `/usr/local/bin/reality-sni-target-worker run`.
 
 ## Cleanup invariant
 

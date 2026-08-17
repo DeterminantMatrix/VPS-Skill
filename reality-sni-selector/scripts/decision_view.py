@@ -83,6 +83,7 @@ def _enrich_candidate(row: dict[str, Any], *, search_confidence: str, search_rea
         "overall_recommendation_confidence": overall,
         "recommendation_grade": rec_grade,
         "recommendation_label": rec_label,
+        "recommendation_tier": "TIER_A_PRIMARY" if selectable and rec_grade in {"A+", "A"} else "TIER_B_BACKUP" if selectable else "TIER_C_REFERENCE",
         "decision_reasons": reasons,
     })
     out["model_commentary_facts"] = {
@@ -99,6 +100,8 @@ def _enrich_candidate(row: dict[str, Any], *, search_confidence: str, search_rea
         "performance": performance,
         "runtime_stability": stability,
         "network_affinity": {"grade": affinity_grade, "code": affinity_code},
+        "discovery_lanes": out.get("lanes") or [],
+        "discovery_sources": out.get("sources") or [],
         "durability_risk": durability,
         "candidate_confidence": candidate_confidence,
         "search_confidence": search_confidence,
@@ -181,7 +184,7 @@ def build_decision_view(result: dict[str, Any]) -> dict[str, Any]:
         assessment["best_alternative"] = alt
     best = top[0] if top else {}
     summary = {
-        "reporting_contract": "v4.3.5",
+        "reporting_contract": "v4.4",
         "recommended_sni": best.get("hostname"),
         "recommended_grade": best.get("recommendation_grade"),
         "recommended_label": best.get("recommendation_label"),
@@ -195,6 +198,8 @@ def build_decision_view(result: dict[str, Any]) -> dict[str, Any]:
         "coverage": coverage,
         "incumbent_tradeoff_code": tradeoff_code,
         "incumbent_tradeoff_text": tradeoff_text,
+        "network_affinity_search": result.get("network_affinity_search") or {},
+        "discovery_lanes": coverage.get("lane_counts") or {},
     }
     return {"top5": top, "comparison": comparison, "incumbent_assessment": assessment, "decision_summary": summary}
 

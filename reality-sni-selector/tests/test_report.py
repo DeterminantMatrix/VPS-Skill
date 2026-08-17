@@ -56,7 +56,7 @@ class ReportTests(unittest.TestCase):
         comparison = [self._row(i + 1) for i in range(n)]
         top = comparison[:5]
         decision = {
-            "reporting_contract": "v4.3.5",
+            "reporting_contract": "v4.4",
             "recommended_sni": top[0]["hostname"] if top else None,
             "recommended_grade": top[0]["recommendation_grade"] if top else None,
             "recommended_label": top[0]["recommendation_label"] if top else None,
