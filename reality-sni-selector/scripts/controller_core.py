@@ -65,7 +65,12 @@ def profile_settings(mode: str) -> tuple[dict[str, int], dict[str, Any]]:
                 "ct_base_cap": 40,
                 "ct_max_per_domain": 20,
                 "dns_workers": 12,
-                "ip_metadata_budget": 128,
+                "ip_metadata_budget": 160,
+                "affinity_prefix_cap": 6,
+                "affinity_passive_ip_cap": 48,
+                "general_osm_record_cap": 1500,
+                "discovery_extension_cap": 160,
+                "ct_extension_base_cap": 24,
             },
             {
                 "run_mode": "audit",
@@ -78,6 +83,10 @@ def profile_settings(mode: str) -> tuple[dict[str, int], dict[str, Any]]:
                 "p50_equivalence_ms": 2.0,
                 "strict_shared_edge": True,
                 "adaptive_gate": False,
+                "eligible_survivor_goal": 25,
+                "probe_lane_reserves": {"network_affinity": 16, "general_regional": 24, "institutional": 12},
+                "fast_affinity_reserve": 8,
+                "deep_affinity_reserve": 3,
             },
         )
     if mode != "quick":
@@ -101,7 +110,12 @@ def profile_settings(mode: str) -> tuple[dict[str, int], dict[str, Any]]:
             "ct_base_cap": 28,
             "ct_max_per_domain": 12,
             "dns_workers": 14,
-            "ip_metadata_budget": 128,
+            "ip_metadata_budget": 160,
+            "affinity_prefix_cap": 4,
+            "affinity_passive_ip_cap": 24,
+            "general_osm_record_cap": 1100,
+            "discovery_extension_cap": 80,
+            "ct_extension_base_cap": 16,
         },
         {
             "run_mode": "quick",
@@ -114,6 +128,10 @@ def profile_settings(mode: str) -> tuple[dict[str, int], dict[str, Any]]:
             "p50_equivalence_ms": 2.0,
             "strict_shared_edge": True,
             "adaptive_gate": True,
+            "eligible_survivor_goal": 15,
+            "probe_lane_reserves": {"network_affinity": 12, "general_regional": 20, "institutional": 10},
+            "fast_affinity_reserve": 6,
+            "deep_affinity_reserve": 2,
         },
     )
 

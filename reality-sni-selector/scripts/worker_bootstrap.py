@@ -28,6 +28,16 @@ TARGET_FILES = (
     "reality_selftest.py",
     "target_worker.py",
 )
+AUX_FILES = (
+    "target_discovery.py.gz",
+    "target_probe.py.gz",
+    "target_worker.py.gz",
+)
+AUX_SHA256 = {
+    "target_discovery.py.gz": "83d075c434f4ffcf441cb5ba8921786fdc4a2c7b7470edb4af7cb1a2bf663ff3",
+    "target_probe.py.gz": "901418fc2e306f7b5824b46d90587a3125daf2e70a8bb04b7c71eff109d7dcad",
+    "target_worker.py.gz": "58c05510c4016dd115b78c47213aaafca5037abaab9a9a15ee73f10ebdbb5fad",
+}
 WRAPPER_NAME = "reality-sni-target-worker"
 DEFAULT_INSTALL_DIR = Path("/opt/reality-sni-selector")
 DEFAULT_WRAPPER_PATH = Path("/usr/local/bin/reality-sni-target-worker")
@@ -70,6 +80,16 @@ def compute_manifest(directory: Path) -> str:
         digest.update(data)
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def auxiliary_payloads_ok(directory: Path) -> bool:
+    for name in AUX_FILES:
+        path = directory / name
+        if not path.is_file() or path.is_symlink():
+            return False
+        if _sha256(path.read_bytes()) != AUX_SHA256[name]:
+            return False
+    return True
 
 
 def wrapper_sha(path: Path) -> str | None:
@@ -142,7 +162,7 @@ def classify_existing(
 
 
 def _read_payload(archive: Path, extract_dir: Path) -> tuple[Path, Path]:
-    allowed = set(TARGET_FILES) | {WRAPPER_NAME}
+    allowed = set(TARGET_FILES) | set(AUX_FILES) | {WRAPPER_NAME}
     try:
         with tarfile.open(archive, "r:gz") as tf:
             members = tf.getmembers()
@@ -169,7 +189,7 @@ def _read_payload(archive: Path, extract_dir: Path) -> tuple[Path, Path]:
 
 
 def _copy_worker_files(source_dir: Path, stage_dir: Path) -> None:
-    for name in TARGET_FILES:
+    for name in (*TARGET_FILES, *AUX_FILES):
         source = source_dir / name
         target = stage_dir / name
         shutil.copyfile(source, target)
@@ -204,7 +224,7 @@ def install_payload(
         payload_dir, payload_wrapper = _read_payload(archive, extracted)
         payload_manifest = compute_manifest(payload_dir)
         payload_wrapper_sha = _sha256(payload_wrapper.read_bytes())
-        if payload_manifest != expected_manifest or payload_wrapper_sha != expected_wrapper_sha256:
+        if payload_manifest != expected_manifest or payload_wrapper_sha != expected_wrapper_sha256 or not auxiliary_payloads_ok(payload_dir):
             raise BootstrapError("PAYLOAD_HASH_MISMATCH", "payload does not match controller expectation")
 
         existing = classify_existing(
@@ -213,7 +233,7 @@ def install_payload(
             legacy_manifests=legacy_manifests,
             legacy_wrapper_hashes=legacy_wrapper_hashes,
         )
-        if existing.get("state") == "MANAGED" and existing.get("manifest") == expected_manifest and existing.get("wrapper_sha256") == expected_wrapper_sha256:
+        if existing.get("state") == "MANAGED" and existing.get("manifest") == expected_manifest and existing.get("wrapper_sha256") == expected_wrapper_sha256 and auxiliary_payloads_ok(install_dir):
             return {
                 "status": "READY",
                 "action": "ALREADY_CURRENT",
@@ -255,7 +275,7 @@ def install_payload(
             marker_path.chmod(0o600)
             shutil.copyfile(payload_wrapper, wrapper_stage)
             wrapper_stage.chmod(0o755)
-            if compute_manifest(stage_dir) != expected_manifest or _sha256(wrapper_stage.read_bytes()) != expected_wrapper_sha256:
+            if compute_manifest(stage_dir) != expected_manifest or not auxiliary_payloads_ok(stage_dir) or _sha256(wrapper_stage.read_bytes()) != expected_wrapper_sha256:
                 raise BootstrapError("STAGE_VERIFY_FAILED")
 
             if install_dir.exists() or wrapper_path.exists():
@@ -272,7 +292,7 @@ def install_payload(
             new_install_activated = True
             os.replace(wrapper_stage, wrapper_path)
             new_wrapper_activated = True
-            if compute_manifest(install_dir) != expected_manifest or wrapper_sha(wrapper_path) != expected_wrapper_sha256:
+            if compute_manifest(install_dir) != expected_manifest or not auxiliary_payloads_ok(install_dir) or wrapper_sha(wrapper_path) != expected_wrapper_sha256:
                 raise BootstrapError("POST_INSTALL_VERIFY_FAILED")
 
             action = "INSTALLED" if existing.get("state") == "ABSENT" else "UPGRADED"

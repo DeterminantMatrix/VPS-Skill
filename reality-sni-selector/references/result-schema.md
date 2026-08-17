@@ -1,4 +1,4 @@
-# Result schema v4 / implementation 4.3.5
+# Result schema v4 / implementation 4.4
 
 The worker returns one JSON object containing at least:
 
@@ -9,7 +9,9 @@ status
 frozen_run
 preflight
 coverage
-regional_candidates
+candidate_discovery
+network_affinity_search
+regional_candidates  # compatibility alias
 candidates
 probe_pool
 eligibility
@@ -51,7 +53,7 @@ The controller derives these final-decision fields:
 - `candidate_confidence`;
 - `search_confidence`;
 - `overall_recommendation_confidence`;
-- `recommendation_grade` / `recommendation_label`;
+- `recommendation_grade` / `recommendation_label` / `recommendation_tier`;
 - `decision_reasons`;
 - `ranking_rationale_code` / `ranking_rationale`;
 - `model_commentary_facts`.
@@ -68,6 +70,18 @@ Durability/operational risk is an estimate from current observable signals only,
 
 Keep search confidence distinct from each candidate's measurement confidence. SPARSE coverage can coexist with HIGH candidate confidence for a fully measured SNI.
 
+`coverage` now contains both breadth and quality evidence:
+
+- `breadth_status`, validated count and nominal goal;
+- `quality_status`, effective `ELIGIBLE` count and survivor goal;
+- `active_discovery_lanes`;
+- `lane_counts` / `source_counts`;
+- combined `status`.
+
+`candidate_discovery` is the canonical multi-lane discovery artifact. `regional_candidates` remains only as a compatibility alias.
+
+`network_affinity_search` records target ingress ASN/prefix, passive lookup method, sampled-IP count, affinity hostnames found, and the SAME_ASN funnel through Gate -> Eligible -> Fast -> Deep -> Reality -> SELECTABLE. It must explicitly report `active_scan: false` for the built-in passive method.
+
 ## Adaptive refill evidence
 
 `reality.adaptive_refill` and `counts` include:
@@ -83,6 +97,6 @@ Typical stop reasons: `SELECTABLE_TARGET_MET`, `REALITY_CANDIDATE_CAP_REACHED`, 
 
 ## Decision summary and reporting
 
-`decision-summary.json` uses reporting contract `v4.3.5` and contains the recommended SNI/grade, candidate/search/overall confidence, P50 equivalence window, selectable count/target, coverage, and incumbent tradeoff.
+`decision-summary.json` uses reporting contract `v4.4` and contains the recommended SNI/grade, candidate/search/overall confidence, P50 equivalence window, selectable count/target, coverage, and incumbent tradeoff.
 
 `report.md` must follow the modular contract in `reporting.md` and never fabricate missing Top-5 rows.

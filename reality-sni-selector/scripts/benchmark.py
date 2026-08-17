@@ -78,8 +78,11 @@ def benchmark_candidates(
             "hostname": candidate["hostname"],
             "incumbent": bool(candidate.get("incumbent")),
             "sources": candidate.get("sources", []),
+            "lanes": candidate.get("lanes", []),
             "organizations": candidate.get("organizations", []),
             "distance_km": candidate.get("distance_km"),
+            "network_affinity": candidate.get("network_affinity"),
+            "asn_evidence": candidate.get("asn_evidence"),
             "eligibility": candidate.get("eligibility"),
             "front_door": candidate.get("front_door"),
             "protocol_compliance": candidate.get("protocol_compliance"),
@@ -115,11 +118,13 @@ def fast_rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
     p50 = row.get("p50_ms") if row.get("p50_ms") is not None else 1e9
     mad = row.get("mad_ms") if row.get("mad_ms") is not None else 1e9
     front = (row.get("front_door") or {}).get("class", "UNKNOWN")
+    affinity = row.get("network_affinity") or {}
     return (
         policy_priority(row.get("eligibility")),
         -float(row.get("success_rate") or 0.0),
         p50_equivalence_band(p50),
         float(mad),
+        int(affinity.get("rank", 9)),
         float(p50),
         edge_priority(front),
         source_priority(row.get("sources") or []),

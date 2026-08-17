@@ -25,7 +25,7 @@ TWO_LEVEL_SUFFIXES = {
 JOB_SCHEMA_VERSION = 4
 WORKER_PROTOCOL = 4
 PROFILE_NAME = "target-measured-v4"
-IMPLEMENTATION_VERSION = "4.3.5"
+IMPLEMENTATION_VERSION = "4.4"
 TARGET_WORKER_FILES = (
     "common.py",
     "target_discovery.py",
@@ -33,6 +33,11 @@ TARGET_WORKER_FILES = (
     "benchmark.py",
     "reality_selftest.py",
     "target_worker.py",
+)
+TARGET_WORKER_AUX_FILES = (
+    "target_discovery.py.gz",
+    "target_probe.py.gz",
+    "target_worker.py.gz",
 )
 
 PROTOCOL_HARD_CODES = frozenset({
@@ -163,7 +168,7 @@ def fetch_bytes(url: str, *, timeout: float = 8.0, max_bytes: int = 1_000_000, h
     request = urllib.request.Request(
         url,
         data=data,
-        headers={"User-Agent": "reality-sni-selector/4.3.5", **(headers or {})},
+        headers={"User-Agent": "reality-sni-selector/4.4", **(headers or {})},
         method="POST" if data is not None else "GET",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -188,7 +193,24 @@ def hostname_from_url(value: str) -> str | None:
 
 
 def source_priority(sources: list[str]) -> int:
-    order = {"incumbent": 0, "seed": 1, "wikidata": 2, "osm": 3, "openalex": 4, "ct": 5}
+    # Source order is a weak prior only. Eligibility is determined by protocol,
+    # safety, reliability and Reality evidence; institutional origin is never a
+    # prerequisite. Network-affinity and general-regional discovery are first-
+    # class candidate lanes in v4.4.
+    order = {
+        "incumbent": 0,
+        "seed": 1,
+        "shodan_affinity": 2,
+        "osm_general": 3,
+        "osm_institutional": 4,
+        "wikidata_institutional": 4,
+        "openalex_institutional": 5,
+        "ct": 6,
+        # Legacy source labels kept for old artifacts/tests.
+        "wikidata": 4,
+        "osm": 4,
+        "openalex": 5,
+    }
     return min((order.get(s, 9) for s in sources), default=9)
 
 

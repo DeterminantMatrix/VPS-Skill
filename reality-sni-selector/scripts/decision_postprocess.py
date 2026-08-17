@@ -9,7 +9,7 @@ from report import build_decision_view, render_report
 
 
 def postprocess_run(run_dir: Path) -> bool:
-    """Derive v4.3.5 decision artifacts from already target-measured evidence."""
+    """Derive v4.4 decision artifacts from already target-measured evidence."""
     result_path = run_dir / "target-result.json"
     if not result_path.is_file():
         return False
@@ -24,6 +24,8 @@ def postprocess_run(run_dir: Path) -> bool:
             "status": result.get("status"),
             "coverage": result.get("coverage", {}),
             "decision_summary": view.get("decision_summary", {}),
+            "network_affinity_search": result.get("network_affinity_search", {}),
+            "candidate_discovery": result.get("candidate_discovery", {}),
             "top5": view.get("top5", []),
             "preliminary_top5": result.get("preliminary_top5", []),
             "comparison": view.get("comparison", []),

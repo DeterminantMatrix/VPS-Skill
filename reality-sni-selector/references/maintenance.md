@@ -1,4 +1,4 @@
-# Selection vs maintenance v4.3.5
+# Selection vs maintenance v4.4
 
 ## SELECTION MODE
 
@@ -32,7 +32,7 @@ Use maintenance for conditions outside the managed worker lifecycle, including:
 - production service/network changes;
 - project documentation or Git changes requested by the user.
 
-After any maintenance that changes worker source or runtime state, start a new selection invocation. v4.3.5 itself avoids creating a frozen job before worker readiness, so a bootstrap-only failure does not create a resumable SNI run.
+After any maintenance that changes worker source or runtime state, start a new selection invocation. v4.4 itself avoids creating a frozen job before worker readiness, so a bootstrap-only failure does not create a resumable SNI run.
 
 ## Read-only Skill validation
 

@@ -112,6 +112,7 @@ class WorkerFlowTests(unittest.TestCase):
         guard = {"inventory_id": "test-vps", "alias": "test-vps", "target_ip": "2.27.212.12", "region": "US"}
         job = build_job(guard, [], "old.example", "explicit", worker_manifest="a" * 64)
         job["limits"].update({"eligibility_pool": 10, "fast_pool": 10, "deep_pool": 4, "deep_pool_cap": 10, "deep_refill_batch": 2, "reality_candidate_cap": 9})
+        job["profile"]["eligible_survivor_goal"] = 8
         candidates = [{"hostname": "old.example", "sources": ["incumbent"], "organizations": ["Old"], "initial_ipv4": ["1.1.1.1"]}]
         candidates += [{"hostname": f"d{i}.example", "sources": ["seed"], "organizations": [f"Org{i}"], "initial_ipv4": [f"1.1.1.{i+1}"]} for i in range(1, 10)]
 
@@ -175,7 +176,7 @@ class WorkerFlowTests(unittest.TestCase):
              patch.object(target_worker, "reality_environment", return_value={"ready": True}), \
              patch.object(target_worker, "_run_reality_control", return_value={"passed": True, "dirty": False, "retried": False}), \
              patch.object(target_worker, "run_candidate", side_effect=fake_reality):
-            out = target_worker.run(job, {"protocol": 4, "implementation_version": "4.3.5", "manifest": "a" * 64})
+            out = target_worker.run(job, {"protocol": 4, "implementation_version": "4.4", "manifest": "a" * 64})
 
         self.assertEqual(out["status"], "SUCCESS")
         self.assertEqual(out["counts"]["selectable"], 5)
@@ -183,6 +184,51 @@ class WorkerFlowTests(unittest.TestCase):
         self.assertEqual(out["counts"]["deep_refill_benchmarked"], 6)
         self.assertEqual(out["counts"]["adaptive_refill_stop_reason"], "SELECTABLE_TARGET_MET")
         self.assertEqual(out["counts"]["reality_tested"], 8)
+
+    def test_low_gate_yield_triggers_bounded_discovery_extension(self):
+        guard = {"inventory_id": "test-vps", "alias": "test-vps", "target_ip": "2.27.212.12", "region": "US"}
+        job = build_job(guard, [], "old.example", "explicit", worker_manifest="a" * 64)
+        job["limits"].update({"eligibility_pool": 8, "fast_pool": 8, "deep_pool": 4, "deep_pool_cap": 8, "deep_refill_batch": 2, "reality_candidate_cap": 8})
+        job["profile"]["eligible_survivor_goal"] = 5
+        initial = [
+            {"hostname": "old.example", "sources": ["incumbent"], "lanes": ["incumbent"], "organizations": ["Old"], "initial_ipv4": ["1.1.1.1"]},
+            {"hostname": "bad.example", "sources": ["osm_general"], "lanes": ["general_regional"], "organizations": ["Bad"], "initial_ipv4": ["1.1.1.2"]},
+        ]
+        discovery = {
+            "validated": initial, "coverage": "SPARSE", "errors": [], "ct_skipped_sufficient_sources": True,
+            "counts": {"validated_ipv4": 2}, "source_records": initial, "lane_counts": {"general_regional": 1},
+            "source_counts": {"osm_general": 1}, "active_discovery_lanes": ["general_regional"],
+            "affinity_search": {"target_ip": "2.27.212.12", "target_asn": 4837, "target_prefix": "2.27.212.0/24", "method": "TEST", "active_scan": False},
+        }
+        extension_rows = [
+            {"hostname": f"new{i}.example", "sources": ["ct"], "lanes": ["general_regional", "passive_expansion"], "organizations": [f"Org{i}"], "initial_ipv4": [f"1.1.2.{i}"]}
+            for i in range(1, 6)
+        ]
+        extension = {"validated": extension_rows, "errors": [], "lane_counts": {"general_regional": 5}, "counts": {"validated_ipv4": 5}}
+
+        def fake_gate(candidate, **kwargs):
+            bad = candidate["hostname"] == "bad.example"
+            return {
+                **candidate, "current_ipv4": candidate["initial_ipv4"], "dns": {"volatile": False},
+                "tls": [] if bad else [{"success": True, "ip": candidate["initial_ipv4"][0], "elapsed_ms": 10.0, "tls_version": "TLSv1.3", "alpn": "h2"}],
+                "http": [], "front_door": {"class": "DIRECT_LIKELY", "network_metadata": {}},
+                "protocol_compliance": {"state": "FAIL" if bad else "PASS", "tls13": not bad, "h2": not bad, "certificate": "PASS", "redirect_policy": "PASS", "per_ip": {}},
+                "hard_rejections": ["HARD:TLS_UNREACHABLE"] if bad else [], "review": [], "warnings": [],
+                "eligibility": "BASELINE_ONLY" if candidate["hostname"] == "old.example" else "HARD_REJECTED" if bad else "ELIGIBLE",
+            }
+
+        with patch.object(target_worker, "preflight", return_value={"observed_egress_ip": "2.27.212.12", "location": {"asn": 4837, "organization": "Target", "country_code": "US"}, "warnings": []}), \
+             patch.object(target_worker, "discover", return_value=discovery), \
+             patch.object(target_worker, "discover_extension", return_value=extension) as ext_mock, \
+             patch.object(target_worker, "gate_candidate", side_effect=fake_gate), \
+             patch.object(target_worker, "benchmark_candidates", return_value=[]), \
+             patch.object(target_worker, "reality_environment", return_value={"ready": False, "reason": "fixture"}):
+            out = target_worker.run(job, {"protocol": 4, "implementation_version": "4.4", "manifest": "a" * 64})
+
+        self.assertEqual(ext_mock.call_count, 1)
+        self.assertTrue(out["coverage"]["discovery_extension"]["triggered"])
+        self.assertEqual(out["coverage"]["discovery_extension"]["new_validated"], 5)
+        self.assertGreaterEqual(out["coverage"]["effective_eligible"], 5)
 
 
 if __name__ == "__main__":

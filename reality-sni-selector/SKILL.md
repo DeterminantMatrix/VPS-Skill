@@ -17,7 +17,7 @@ Use the controller as the control plane and the selected VPS as the measurement 
 - Do not download webpage bodies. HTTP evidence is bounded HEAD/header-only traffic.
 - Do not run MTR, traceroute, iperf3, streaming, throughput, or unrelated quality tests.
 - Do not modify production sing-box configuration, services, firewall, routes, SSH configuration, or networking during selection.
-- Before freezing a selection job, ensure the exact reviewed worker is ready. Normal v4.3.5 selection may install/upgrade only the Skill's fixed managed worker paths; never overwrite unknown content or install system packages. Read `references/worker-lifecycle.md`.
+- Before freezing a selection job, ensure the exact reviewed worker is ready. Normal v4.4 selection may install/upgrade only the Skill's fixed managed worker paths; never overwrite unknown content or install system packages. Read `references/worker-lifecycle.md`.
 - Freeze the profile, worker manifest, target identity, region, incumbent mode, seed set, limits, and timestamps **only after worker readiness succeeds**.
 - Never treat missing evidence as proof of a direct origin.
 - Never let low latency or Reality compatibility rescue a public-CDN/shared-platform policy rejection.
@@ -83,7 +83,7 @@ Never substitute Apple or another universal default incumbent.
 2. **Managed worker readiness before freeze**
    - Compute the expected SHA-256 manifest of the six fixed worker Python files and the reviewed wrapper SHA-256.
    - Probe exactly `/usr/local/bin/reality-sni-target-worker identity` through the declared alias. This operation is read-only and generates no candidate traffic.
-   - If protocol 4, implementation 4.3.5, worker manifest, and wrapper hash are exact, continue without writes.
+   - If protocol 4, implementation 4.4, worker manifest, and wrapper hash are exact, continue without writes.
    - If both managed paths are absent, automatically bootstrap the reviewed worker when `--worker-bootstrap auto` is active.
    - If `.managed.json` proves the existing worker is managed by this Skill, safely upgrade it when stale.
    - Recognize reviewed legacy v4/v4.1 installs only by exact known manifest/wrapper hashes, then upgrade them safely.
@@ -91,8 +91,8 @@ Never substitute Apple or another universal default incumbent.
    - Stage, hash-verify, back up managed old content, atomically activate, verify again, and probe identity again before proceeding.
    - Read `references/worker-lifecycle.md` and `references/target-worker-install.md`.
 
-3. **Freeze v4.3.5 worker contract**
-   - Freeze `schema_version: 4`, `worker_protocol: 4`, `implementation_version: 4.3.5`, and `expected_worker_manifest` only after exact readiness.
+3. **Freeze v4.4 worker contract**
+   - Freeze `schema_version: 4`, `worker_protocol: 4`, `implementation_version: 4.4`, and `expected_worker_manifest` only after exact readiness.
    - A readiness failure creates no frozen SNI job. Start candidate selection only after worker readiness is `READY`.
 
 4. **One fixed measurement SSH process**
@@ -110,17 +110,22 @@ Never substitute Apple or another universal default incumbent.
    - Fail closed on zero or multiple distinct Reality targets.
    - Read `references/incumbent.md`.
 
-6. **Target-local discovery**
-   - Default QUICK mode aims for about 200 validated public-IPv4 hostnames, using primary regional institutional sources first and CT only as backfill when source diversity is insufficient.
-   - AUDIT mode restores the broader 400-hostname coverage goal and full CT pass.
-   - Query independent regional metadata sources concurrently when practical; do not scan raw address space.
-   - Record source failures and coverage as `GOOD`, `LIMITED`, or `SPARSE`; never claim QUICK coverage is exhaustive.
+6. **Target-local multi-lane discovery**
+   - Treat institution provenance as a preference, not the candidate universe. Run complementary General Regional, Network Affinity, Institutional, and Passive Expansion lanes from the target VPS.
+   - General Regional queries nearby public website metadata without requiring an institution class.
+   - Network Affinity uses the inventory ingress IPv4, RIPEstat routing metadata, and a tiny bounded Shodan InternetDB passive IP sample to discover published hostnames. Never open TCP connections to those sampled addresses and never sweep an ASN/CIDR.
+   - Institutional discovery keeps Wikidata/OpenAlex and institution-tagged OSM as a high-quality preference lane.
+   - Passive CT expansion may use registrable domains found by any lane, not only institutional roots.
+   - QUICK keeps a nominal 200 validated-hostname breadth goal but also targets at least 15 effective Protocol/Policy `ELIGIBLE` survivors. AUDIT targets 400 validated and 25 effective survivors.
+   - Record `breadth_status`, `quality_status`, active lane counts, source failures, and the Network Affinity funnel; never equate a large institution-only list with exhaustive regional coverage.
    - Read `references/candidate-discovery.md`.
 
-7. **Diversity-aware eligibility pool**
+7. **Diversity- and lane-aware eligibility pool**
    - Keep the incumbent.
    - QUICK: select at most 80 candidates. AUDIT: at most 120.
-   - Favor diversity across registrable domains, initial IPv4 sets, organizations, source buckets, and locality.
+   - Favor diversity across registrable domains, initial IPv4 sets, organizations, discovery lanes, and locality.
+   - Reserve bounded measurement opportunity for Network Affinity, General Regional, and Institutional candidates. A reserve never bypasses Protocol, Policy, reliability, or Reality gates.
+   - Preserve a small affinity reserve in Fast/initial Deep so a valid SAME_ASN/near-network candidate is not discarded solely because another candidate is a few milliseconds faster. Same-ASN still cannot override materially worse tail latency/stability.
    - Mark unprobed candidates `DEFERRED:PROBE_BUDGET` or `DEFERRED:DIVERSITY_BUDGET`; never call them failures.
 
 8. **Eligibility gate**
@@ -193,8 +198,11 @@ Default QUICK:
 - Reality candidate cap: 16
 - candidate Reality requirement: 5/5, fail-fast after the first clean failure
 - comparison minimum: 5 distinct measured domains when available
-- IP metadata budget: 128 unique IPv4s
+- IP metadata budget: 160 unique IPv4s
 - target latency goal: P50 <=60 ms, advisory only
+- effective eligible-survivor goal: 15
+- Network Affinity passive sample: <=24 IP lookups across <=4 announced prefixes, metadata-only/no active scan
+- lane opportunity reserves: Network Affinity / General Regional / Institutional
 - passive CT failure budget: 3 consecutive base-query failures
 - fixed candidate port: 443
 
@@ -210,7 +218,9 @@ frozen-run.json
 target-frozen-run.json
 target-result.json
 target-preflight.json
-regional-candidates.json
+candidate-discovery.json
+network-affinity-search.json
+regional-candidates.json  # compatibility alias
 candidates.json
 probe-pool.json
 eligibility.json
@@ -235,14 +245,14 @@ Normal `SELECTION MODE` may manage only the Skill's fixed worker runtime. Unknow
 
 ## Bundled scripts
 
-- `scripts/controller_run.py`: compact v4.3.5 entrypoint around the stable controller runtime plus deterministic decision postprocessing.
+- `scripts/controller_run.py`: compact v4.4 entrypoint around the stable controller runtime plus deterministic decision postprocessing.
 - `scripts/controller_runtime.py`: stable local inventory resolution, pre-freeze worker readiness, frozen QUICK/AUDIT job, fixed measurement orchestration, and base artifacts.
 - `scripts/controller_core.py`: compact pure profile/seed/frozen-job helpers.
-- `scripts/decision_postprocess.py`: creates `decision-summary.json`, enriches `top5.json`, and normalizes the final v4.3.5 report after target measurement.
+- `scripts/decision_postprocess.py`: creates `decision-summary.json`, enriches `top5.json`, and normalizes the final v4.4 report after target measurement.
 - `scripts/worker_lifecycle.py`: controller-side identity probe, fixed payload creation, bounded SCP/SSH bootstrap orchestration.
 - `scripts/worker_bootstrap.py`: target-side fixed-path atomic installer/upgrade with legacy recognition, backups, hash verification, and rollback.
 - `scripts/target_worker.py`: fixed target-side adaptive orchestrator and incumbent assessment.
-- `scripts/target_discovery.py`: bounded target-side regional/passive discovery.
+- `scripts/target_discovery.py`: bounded target-side multi-lane General Regional / Network Affinity / Institutional / passive discovery.
 - `scripts/target_probe.py`: TLS/HEAD/network evidence and public-CDN/shared-platform classification.
 - `scripts/benchmark.py`: interleaved fast/deep benchmarking and policy-first ranking.
 - `scripts/reality_selftest.py`: isolated local Reality integration and sanitized failure evidence.
@@ -252,6 +262,6 @@ Normal `SELECTION MODE` may manage only the Skill's fixed worker runtime. Unknow
 - `scripts/common.py`: validation, stats, v4 contract constants, worker manifest, safe JSON helpers.
 - `scripts/reality-sni-target-worker`: fixed `identity`/`run` deployment wrapper.
 
-For migration semantics, read `references/migration-v4.3-to-v4.3.5.md`.
+For migration semantics, read `references/migration-v4.3.5-to-v4.4.md`.
 
 Read `references/dependencies.md` before any dependency installation. Normal selection never installs system packages.

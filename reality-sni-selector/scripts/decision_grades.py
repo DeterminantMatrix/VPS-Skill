@@ -6,13 +6,24 @@ def _search_confidence(coverage: dict[str, Any], selectable_count: int, selectab
     status = str(coverage.get("status") or "SPARSE")
     validated = int(coverage.get("validated") or 0)
     goal = max(1, int(coverage.get("goal") or 1))
-    reasons = [f"COVERAGE_{status}", f"VALIDATED_{validated}_OF_{goal}"]
-    if status == "GOOD":
+    eligible = int(coverage.get("effective_eligible") or 0)
+    eligible_goal = max(1, int(coverage.get("eligible_goal") or 1))
+    lanes_present = "active_discovery_lanes" in coverage
+    lanes = list(coverage.get("active_discovery_lanes") or [])
+    reasons = [
+        f"COVERAGE_{status}",
+        f"VALIDATED_{validated}_OF_{goal}",
+        f"ELIGIBLE_{eligible}_OF_{eligible_goal}",
+        f"ACTIVE_DISCOVERY_LANES_{len(lanes)}",
+    ]
+    if status == "GOOD" and eligible >= eligible_goal and len(lanes) >= 2:
         return "HIGH", reasons
-    if status == "LIMITED":
+    if status in {"GOOD", "LIMITED"} and eligible >= max(5, eligible_goal // 2) and len(lanes) >= 2:
         return "MEDIUM", reasons
-    if selectable_count >= selectable_target and validated >= 40:
-        reasons.append("SELECTABLE_TARGET_MET_DESPITE_SPARSE_COVERAGE")
+    if selectable_count >= selectable_target and validated >= 40 and (len(lanes) >= 2 or not lanes_present):
+        reasons.append("SELECTABLE_TARGET_MET_DESPITE_LIMITED_SEARCH")
+        if not lanes_present:
+            reasons.append("LEGACY_COVERAGE_LANE_DATA_UNAVAILABLE")
         return "MEDIUM", reasons
     return "LOW", reasons
 
@@ -48,7 +59,7 @@ def _tls_reliability_grade(row: dict[str, Any]) -> str:
 
 
 def _tls_grade(row: dict[str, Any]) -> str:
-    """Compatibility alias; v4.3.5 reports this dimension as TLS reliability."""
+    """Compatibility alias; v4.4 reports this dimension as TLS reliability."""
     return _tls_reliability_grade(row)
 
 
@@ -104,9 +115,16 @@ def _runtime_stability_grade(row: dict[str, Any]) -> tuple[str, list[str]]:
 
 
 def _durability_risk(row: dict[str, Any], stability_grade: str) -> tuple[str, list[str]]:
+    """Operational heuristic based only on observed evidence.
+
+    Institutional origin is a useful provenance hint, not a requirement. v4.4
+    therefore does not penalize a clean general-regional or affinity candidate
+    merely because it was not discovered through an institution directory.
+    """
     reasons: list[str] = []
     front = (row.get("front_door") or {}).get("class") or "UNKNOWN"
     sources = set(row.get("sources") or [])
+    lanes = set(row.get("lanes") or [])
     organizations = [v for v in (row.get("organizations") or []) if v]
     volatile = bool((row.get("dns") or {}).get("volatile"))
     review = list(row.get("review") or [])
@@ -116,15 +134,18 @@ def _durability_risk(row: dict[str, Any], stability_grade: str) -> tuple[str, li
         reasons.append("FRONT_DOOR_UNCERTAIN")
     if review:
         reasons.append("REVIEW_SIGNALS_PRESENT")
-    institutional = bool(sources & {"seed", "wikidata", "osm", "openalex"})
     if not organizations:
         reasons.append("ORGANIZATION_EVIDENCE_LIMITED")
-    if not institutional:
-        reasons.append("INSTITUTIONAL_SOURCE_EVIDENCE_LIMITED")
+    if "institutional" in lanes or sources & {"wikidata_institutional", "osm_institutional", "openalex_institutional", "wikidata", "osm", "openalex"}:
+        reasons.append("INSTITUTIONAL_PROVENANCE_BONUS")
+    if "network_affinity" in lanes:
+        reasons.append("NETWORK_AFFINITY_DISCOVERY_EVIDENCE")
     if volatile or review or front in {"UNKNOWN_EDGE_EVIDENCE", "UNKNOWN_TOOLING"}:
         return "HIGH", reasons
-    if stability_grade == "A" and front in {"DIRECT_CONFIRMED", "DIRECT_LIKELY"} and institutional and organizations:
+    if stability_grade == "A" and front in {"DIRECT_CONFIRMED", "DIRECT_LIKELY"} and organizations:
         return "LOW", reasons
+    if stability_grade == "A" and front in {"DIRECT_CONFIRMED", "DIRECT_LIKELY"}:
+        return "MEDIUM", reasons
     return "MEDIUM", reasons
 
 
