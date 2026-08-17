@@ -1,267 +1,76 @@
 ---
 name: reality-sni-selector
-description: Select and verify VLESS Reality SNI / handshake targets for one owned VPS. Use when the user asks for 优选 SNI, Reality SNI selection, VLESS Reality camouflage/handshake target selection, current-SNI health evaluation, or comparison of serverName/dest/handshake candidates. Resolve the VPS from the local inventory and existing SSH alias, automatically ensure the Skill's fixed target worker is safely installed/current, perform all candidate discovery/network measurements on the target VPS, reject confirmed public-CDN/shared-platform front doors, compare against the incumbent, validate finalists with isolated sing-box Reality tests, and produce a ranked multi-dimensional comparison of at least five measured domains when available.
+description: Select and verify VLESS Reality SNI / handshake targets for one owned VPS. Use for 优选 SNI, Reality SNI selection, VLESS Reality camouflage/handshake target selection, current-SNI health evaluation, or comparison of serverName/dest/handshake candidates. Resolve the VPS from the local inventory and existing SSH alias, ensure the reviewed managed target worker is current, perform discovery/network measurements on the target VPS, reject unsafe/incompatible targets, validate finalists with isolated sing-box Reality tests, and return an evidence-rich ranked portfolio.
 ---
 
 # 优选 SNI
 
-Use the controller as the control plane and the selected VPS as the measurement plane.
+Use the controller as control plane and the selected VPS as measurement plane.
 
 ## Non-negotiable rules
 
-- Handle one explicit owned VPS per run.
-- Treat the local workspace inventory as source of truth. Accept a public IPv4, exact inventory identifier/SSH alias/name, or a uniquely high-confidence fuzzy name. Never silently choose an ambiguous fuzzy match. Resolve through `inventory/hosts.yaml` first, with `/opt/vps-control/inventory/hosts.yaml` only as a legacy fallback. Follow `references/inventory-contract.md`.
-- Use the declared existing SSH alias only. Never construct `root@IP`, derive SSH from monitoring/Komari data, or rebuild user/port/key arguments from inventory facts.
-- Run candidate discovery and every candidate-related DNS, TCP, TLS, HTTP-header, ASN/platform/CDN, latency, and Reality measurement on the target VPS.
-- Use IPv4 and TCP/443 only. Never scan ports, CIDRs, arbitrary addresses, or alternate ports.
-- Do not download webpage bodies. HTTP evidence is bounded HEAD/header-only traffic.
-- Do not run MTR, traceroute, iperf3, streaming, throughput, or unrelated quality tests.
-- Do not modify production sing-box configuration, services, firewall, routes, SSH configuration, or networking during selection.
-- Before freezing a selection job, ensure the exact reviewed worker is ready. Normal v4.4 selection may install/upgrade only the Skill's fixed managed worker paths; never overwrite unknown content or install system packages. Read `references/worker-lifecycle.md`.
-- Freeze the profile, worker manifest, target identity, region, incumbent mode, seed set, limits, and timestamps **only after worker readiness succeeds**.
-- Never treat missing evidence as proof of a direct origin.
-- Never let low latency or Reality compatibility rescue a public-CDN/shared-platform policy rejection.
-- Never print or persist passwords, private keys, UUIDs, Reality private keys, short IDs, tokens, cookies, or full secret-bearing proxy configs.
+- Handle one explicit owned VPS per run. Resolve `inventory/hosts.yaml` first, with `/opt/vps-control/inventory/hosts.yaml` only as legacy fallback. Accept a public IPv4, exact inventory identifier/SSH alias/name, or one uniquely high-confidence fuzzy name; fail ambiguous matches. See `references/inventory-contract.md`.
+- Use only the declared existing SSH alias. Never construct `root@IP`, infer management access from Komari/telemetry, or rebuild SSH credentials from inventory facts.
+- Run all candidate discovery, DNS, TCP/443, TLS, HTTP-header, ASN/platform/CDN, latency and Reality measurements on the target VPS. IPv4/TCP 443 only; no CIDR/port scan, MTR, traceroute, iperf3, throughput, streaming or webpage-body download.
+- Do not change production sing-box/SNI, services, firewall, routes, SSH or networking. Normal selection may install/upgrade only the reviewed managed worker paths after ownership/hash checks. Never overwrite unknown content or install system packages. See `references/safety-boundaries.md` and `references/worker-lifecycle.md`.
+- Freeze the profile, worker manifest, target identity, region, incumbent mode, seed set, limits and timestamps only after exact worker readiness.
+- Missing evidence never proves a direct origin. Low latency or Reality compatibility never rescues a Protocol/Policy hard rejection.
+- Never print/persist passwords, private keys, UUIDs, Reality private keys, short IDs, tokens, cookies or full secret-bearing proxy configs.
 
-Read `references/safety-boundaries.md` before changing an execution boundary.
-
-## Normal input
-
-Prefer the target inventory IPv4, but also accept an exact inventory identifier/SSH alias/name or one uniquely high-confidence fuzzy name:
+## Normal invocation
 
 ```text
 python3 scripts/controller_run.py <inventory-target>
 ```
 
-Examples: `23.19.228.207`, `lax-hostdzire`, or a unique typo-like selector such as `hostzdire`. A fuzzy match is recorded as `TARGET_SELECTOR_FUZZY_MATCH`; ambiguous matches fail closed.
-
-Optional explicit inventory path:
+Optional controls:
 
 ```text
-python3 scripts/controller_run.py <inventory-target> --inventory <inventory/hosts.yaml>
+--inventory <inventory/hosts.yaml>
+--incumbent <hostname>
+--seed-file <fixed-region-seed-file>
+--profile audit
+--worker-bootstrap never
+--worker-ready-only
 ```
 
-The target worker auto-resolves the current production Reality handshake/SNI read-only. If it is unavailable or ambiguous, rerun with:
-
-```text
-python3 scripts/controller_run.py <inventory-target> --incumbent <hostname>
-```
-
-Optional region seed file:
-
-```text
-python3 scripts/controller_run.py <inventory-target> --seed-file <fixed-region-seed-file>
-```
-
-Default to the adaptive QUICK profile. Use AUDIT only when the user explicitly asks for broader coverage/deeper discovery:
-
-```text
-python3 scripts/controller_run.py <inventory-target> --profile audit
-```
-
-Worker lifecycle controls:
-
-```text
-python3 scripts/controller_run.py <inventory-target> --worker-bootstrap never
-python3 scripts/controller_run.py <inventory-target> --worker-ready-only
-```
-
-Use `--worker-bootstrap never` only when the user explicitly wants no worker-file writes. `--worker-ready-only` prepares/verifies the worker and exits before freeze or candidate traffic.
-
-Never substitute Apple or another universal default incumbent.
+Default to QUICK. Use AUDIT only when the user explicitly requests broader/deeper coverage. Auto-resolve the incumbent read-only from the live sing-box config; if unavailable/ambiguous, require `--incumbent`. Never substitute a universal default SNI.
 
 ## Workflow
 
-1. **Inventory guard**
-   - Require the local `hosts.<canonical>` schema.
-   - Resolve exact public IPv4 or exact identifiers first. Allow fuzzy name resolution only when one candidate exceeds the confidence threshold with a clear margin over the runner-up; otherwise fail ambiguous.
-   - Record selector input, match mode, matched identifier, score, and `TARGET_SELECTOR_FUZZY_MATCH` when fuzzy resolution is used.
-   - Resolve the selected host public IPv4 only from `access.address`/`access.hostname` facts.
-   - Require explicit `alias`, `region`, `access.method: ssh`, `capabilities.ssh: true`, and non-retired/non-forbidden state.
-   - Preserve `inventory_id` and SSH alias as separate identities.
+1. **Inventory guard** — resolve canonical inventory ID, public IPv4, region and SSH alias; record fuzzy-match evidence; reject retired/forbidden/non-SSH targets.
+2. **Worker readiness before freeze** — probe `/usr/local/bin/reality-sni-target-worker identity`. Require protocol 4, implementation 4.5, exact six-file manifest and reviewed wrapper hash. Auto-install/upgrade only absent or proven managed/known-legacy worker paths; unknown content => `WORKER_PATH_CONFLICT`. See `references/worker-lifecycle.md` and `references/target-worker-install.md`.
+3. **Freeze and measure** — after READY, freeze the v4.5 job and invoke exactly `/usr/local/bin/reality-sni-target-worker run` through the existing alias, sending JSON on stdin. Candidate measurement uses one fixed worker process.
+4. **Preflight/incumbent** — observe target egress/location/ASN/tooling, resolve the current REALITY target from live sing-box config when possible, and fail closed on zero/multiple targets. See `references/incumbent.md`.
+5. **Multi-lane discovery** — combine General Regional, Network Affinity, Institutional preference and bounded Passive Expansion. Institution is a preference, not the candidate universe. Network Affinity uses RIPEstat + tiny Shodan InternetDB passive samples only; never sweep ASN/CIDR. Filter common social/profile/aggregator URLs only as Regional/Institutional source hygiene. Apply source/validated lane reserves before global caps so General Regional cannot starve smaller lanes. See `references/candidate-discovery.md`.
+6. **Eligibility** — require REALITY Protocol minimum: public IPv4/TCP443, valid certificate/SNI identity, TLS1.3, ALPN h2, and no confirmed cross-site redirect. Keep public CDN/shared platform as this project's stricter safety hard policy. Unknown edge evidence remains REVIEW. See `references/evaluation-model.md` and `references/rejection-codes.md`.
+7. **Fast/Deep** — preserve diversity and bounded Network-Affinity opportunity. QUICK Fast 36x3, initial Deep 10, 20 total Deep samples with Fast reuse. Refill in batches of 4, preferring new registrable-domain families. See `references/benchmark.md`.
+8. **Reality integration** — test incumbent control first, then only `ELIGIBLE` Deep survivors. A candidate is `SELECTABLE` only with 5/5 transport and 5/5 cleanup. Cleanup uncertainty => `TARGET_DIRTY_STATE`. This is a target-local integration test, not a real client-path test. See `references/reality.md`.
+9. **Portfolio + quality stop** — main Top-5 requires five independent registrable-domain families; apex/`www` variants remain `family_alternatives`. Normal early success also requires at least one selectable candidate meeting the frozen quality target. If five valid families exist but bounded search cannot meet quality, return `SUCCESS_QUALITY_BELOW_TARGET` rather than pretending the quality goal was met.
+10. **Decision/reporting** — assess incumbent with the same Protocol/Policy/Reliability/Reality evidence. Keep Candidate Confidence, Run Coverage Confidence and Global Optimality Confidence separate. Separate TLS reliability, Reality reliability and Latency Consistency; do not turn one-run latency spread into a durability claim. See `references/incumbent-assessment.md`, `references/result-schema.md`, and `references/reporting.md`.
 
-2. **Managed worker readiness before freeze**
-   - Compute the expected SHA-256 manifest of the six fixed worker Python files and the reviewed wrapper SHA-256.
-   - Probe exactly `/usr/local/bin/reality-sni-target-worker identity` through the declared alias. This operation is read-only and generates no candidate traffic.
-   - If protocol 4, implementation 4.4, worker manifest, and wrapper hash are exact, continue without writes.
-   - If both managed paths are absent, automatically bootstrap the reviewed worker when `--worker-bootstrap auto` is active.
-   - If `.managed.json` proves the existing worker is managed by this Skill, safely upgrade it when stale.
-   - Recognize reviewed legacy v4/v4.1 installs only by exact known manifest/wrapper hashes, then upgrade them safely.
-   - If unknown content occupies the fixed paths, return `WORKER_PATH_CONFLICT`; never overwrite it.
-   - Stage, hash-verify, back up managed old content, atomically activate, verify again, and probe identity again before proceeding.
-   - Read `references/worker-lifecycle.md` and `references/target-worker-install.md`.
+## QUICK defaults
 
-3. **Freeze v4.4 worker contract**
-   - Freeze `schema_version: 4`, `worker_protocol: 4`, `implementation_version: 4.4`, and `expected_worker_manifest` only after exact readiness.
-   - A readiness failure creates no frozen SNI job. Start candidate selection only after worker readiness is `READY`.
+- discovery: source cap 520, validated cap 240, breadth goal 200, effective `ELIGIBLE` goal 15; bounded source/validated lane reserves; Network Affinity <=24 passive IP lookups across <=4 announced prefixes.
+- measurement: eligibility 80, Fast 36x3, initial Deep 10, Deep cap 22, refill 4, 20 total Deep samples with Fast reuse, Reality cap 20, target 5 independent families.
+- quality target: P50 <=60 ms, or near-quality P50 <=1.25x target + P95 <=1.60x + MAD <=7.5 ms + TLS success >=95%. It is a search-stop/quality label, not an eligibility hard gate.
+- ranking: Protocol/Policy/Reality/Reliability first; treat <=2 ms P50 difference as near-tie and use P95, MAD/Latency Consistency, Network Affinity and operational evidence to break it.
 
-4. **One fixed measurement SSH process**
-   - Invoke exactly `/usr/local/bin/reality-sni-target-worker run` through the existing alias.
-   - Send the frozen JSON job on stdin.
-   - Do not pass arbitrary shell fragments, remote paths, ports, or commands into the measurement job.
-   - Persist only a bounded secret-redacted stderr summary for measurement failures.
-   - Write every invocation into a dedicated run directory. The controller creates a unique child directory by default; use `--run-dir <empty-dir>` to choose it explicitly.
-   - Worker identity/bootstrap may use bounded pre-freeze SSH/SCP operations; the actual SNI measurement still uses one fixed worker `run` process.
+AUDIT keeps the same architecture with source 1,200, validated 600, eligible goal 25, eligibility 120, Fast 50x5, initial Deep 10, Deep cap 24, Reality cap 22 and broader passive-affinity limits.
 
-5. **Target preflight and incumbent**
-   - Observe target egress IPv4, location/ASN evidence, and approved tool paths.
-   - Prefer fixed reviewed sing-box ELF paths; use PATH only as a fallback after ELF validation.
-   - Resolve incumbent from the running sing-box process `-c/--config` and `-C/--config-directory` arguments when possible; fall back to fixed read-only config locations only when no live config can be read.
-   - Fail closed on zero or multiple distinct Reality targets.
-   - Read `references/incumbent.md`.
+## Required outputs
 
-6. **Target-local multi-lane discovery**
-   - Treat institution provenance as a preference, not the candidate universe. Run complementary General Regional, Network Affinity, Institutional, and Passive Expansion lanes from the target VPS.
-   - General Regional queries nearby public website metadata without requiring an institution class.
-   - Network Affinity uses the inventory ingress IPv4, RIPEstat routing metadata, and a tiny bounded Shodan InternetDB passive IP sample to discover published hostnames. Never open TCP connections to those sampled addresses and never sweep an ASN/CIDR.
-   - Institutional discovery keeps Wikidata/OpenAlex and institution-tagged OSM as a high-quality preference lane.
-   - Passive CT expansion may use registrable domains found by any lane, not only institutional roots.
-   - QUICK keeps a nominal 200 validated-hostname breadth goal but also targets at least 15 effective Protocol/Policy `ELIGIBLE` survivors. AUDIT targets 400 validated and 25 effective survivors.
-   - Record `breadth_status`, `quality_status`, active lane counts, source failures, and the Network Affinity funnel; never equate a large institution-only list with exhaustive regional coverage.
-   - Read `references/candidate-discovery.md`.
+Normal runs write structured lifecycle and measurement artifacts plus `report.md`, including `worker-lifecycle.json`, frozen/preflight/result JSON, `candidate-discovery.json`, `network-affinity-search.json`, eligibility/rejections, Fast/Deep, Reality, incumbent assessment, `decision-summary.json`, `top5.json`, comparison, metadata and stage status. If readiness fails, blocked lifecycle artifacts may exist without a frozen run.
 
-7. **Diversity- and lane-aware eligibility pool**
-   - Keep the incumbent.
-   - QUICK: select at most 80 candidates. AUDIT: at most 120.
-   - Favor diversity across registrable domains, initial IPv4 sets, organizations, discovery lanes, and locality.
-   - Reserve bounded measurement opportunity for Network Affinity, General Regional, and Institutional candidates. A reserve never bypasses Protocol, Policy, reliability, or Reality gates.
-   - Preserve a small affinity reserve in Fast/initial Deep so a valid SAME_ASN/near-network candidate is not discarded solely because another candidate is a few milliseconds faster. Same-ASN still cannot override materially worse tail latency/stability.
-   - Mark unprobed candidates `DEFERRED:PROBE_BUDGET` or `DEFERRED:DIVERSITY_BUDGET`; never call them failures.
+The final report must:
 
-8. **Eligibility gate**
-   - Measure DNS and all current common IPv4s from the target.
-   - QUICK: start with one cheap TLS attempt per current IP; only candidates that would be rejected solely for a transport failure get the second gate sample. AUDIT keeps two gate samples per IP.
-   - Verify SNI TLS and certificate validity/identity.
-   - Enforce the REALITY target protocol minimum before performance ranking: every current usable IPv4 must negotiate TLS 1.3 and ALPN `h2`; otherwise hard reject as `HARD:REALITY_MIN_TLS13` or `HARD:REALITY_MIN_H2`.
-   - Hard reject a confirmed cross-site HTTP redirect as `HARD:REALITY_CROSS_SITE_REDIRECT`; same-site/root-to-www redirects remain acceptable. If redirect evidence is unavailable, preserve review/unknown state rather than inventing a pass.
-   - Collect bounded CNAME, HEAD headers, and cached network-organization evidence.
-   - Hard reject confirmed public CDN (`HARD:KNOWN_PUBLIC_CDN`) and confirmed shared platform (`HARD:KNOWN_SHARED_PLATFORM`).
-   - Treat Pantheon as a shared-platform risk when high-confidence Pantheon hostname/CNAME/header/network-organization evidence is present.
-   - Treat HEAD failure, unknown edge evidence, bounded HTTP status errors, and insufficient metadata as warnings/review rather than false proof of directness. TLS 1.2-only, no-h2, invalid identity/certificate, and confirmed cross-site redirect are protocol hard failures.
-   - Read `references/evaluation-model.md`, `references/gates.md`, and `references/rejection-codes.md`.
+- state incumbent verdict and best alternative;
+- show five independent SELECTABLE families when available, never duplicate a root-domain family to fill the table;
+- include same-family alternatives, Protocol, TLS/ALPN, Policy, Reality, TLS reliability, P50/P95/MAD, Latency Consistency, Network Affinity, operational risk, ASN/org, incumbent delta and all confidence dimensions;
+- show source/validated saturation, lane reserves, source errors, baseline-only count and SAME_ASN hostname/family/endpoint funnel;
+- distinguish a fully measured candidate from claims of global optimality;
+- never invent historical uptime, future stability, unseen CDN/ASN relationships or client-to-VPS performance.
 
-9. **Fast and deep benchmark**
-   - QUICK Fast: up to 36 candidates, 3 interleaved TCP+TLS samples each.
-   - AUDIT Fast: up to 50 candidates, 5 interleaved samples each.
-   - Deep starts with 10 candidates and **20 total samples per candidate**, reusing same-run Fast samples and only measuring the missing samples.
-   - If Reality has not produced five `SELECTABLE` candidates, refill Deep from already-Fast-measured `ELIGIBLE` survivors in deterministic batches of four. QUICK may grow Deep to 18 total rows including the incumbent; AUDIT may grow to 20. Never remeasure candidates already in Deep.
-   - Deep reliability gates remain unchanged: overall TLS success >=95%; per-IP >=90% when sufficiently sampled.
-   - Treat P50 <=60 ms as an advisory target, not a hard cutoff.
-   - Rank policy state before reliability/latency: `ELIGIBLE` before `REVIEW_REQUIRED`, then success rate, a frozen 2 ms P50 near-tie band, P95, MAD, network affinity, exact P50, IP consistency, edge confidence, and source evidence.
-   - Record `Network Affinity` from observed facts only: `SAME_ASN` is strongest, then same observed organization or IPv4 /16 prefix, then same country; unknown topology remains unknown. Use affinity as a near-tie preference, never as a replacement for protocol/reliability gates or a large latency gap.
-   - Read `references/benchmark.md`.
+## Bundled implementation
 
-10. **LOCAL_REALITY_INTEGRATION_TEST**
-   - Test the incumbent control first. If the first control attempt succeeds, continue immediately. If it fails cleanly, run two diagnostic retries and require at least 2/3 total successes; cleanup failure invalidates the batch immediately.
-   - Test only Deep survivors whose policy state is `ELIGIBLE`; do not spend Reality budget on `REVIEW_REQUIRED` rows that cannot become `SELECTABLE`.
-   - QUICK: start with the initial Deep set, then trigger Deep refill whenever the current tested set still yields fewer than five `SELECTABLE`. Stop immediately when five are found, when the Fast survivor pool/Deep cap is exhausted, or after 16 candidate Reality tests. AUDIT uses the same adaptive rule with a 20-row Deep cap and 18 candidate Reality tests.
-   - Require 5/5 candidate success. Because one clean transport failure makes 5/5 impossible, stop that candidate immediately and move to the next ranked candidate.
-   - Use fresh temporary keys/UUID/short ID, loopback-only listeners, ephemeral/high ports, `sing-box check`, one short HEAD through loopback SOCKS, and verified cleanup.
-   - Record sanitized failure stages such as config check, server start, client start, proxy HEAD transport, timeout, or cleanup.
-   - Call this a local integration test; never claim it validates a real client-to-VPS path.
-   - Read `references/reality.md`.
-
-11. **Incumbent assessment and final reporting**
-   - Evaluate the currently configured SNI using the same policy, deep reliability, Reality-control, and performance evidence. Emit one of: `继续使用`, `可继续使用，但有优化空间`, `暂可继续使用，建议复核`, `建议更换`, `需要更换`, or `暂无法评估`.
-   - Hard policy failure, deep reliability failure, or a clean failed Reality control produces `需要更换`; a materially faster fully selectable alternative can produce `建议更换` even when the incumbent is otherwise healthy.
-   - Read `references/incumbent-assessment.md` for thresholds and precedence.
-   - Keep `policy_eligibility`, `benchmark_eligibility`, `reality_compatibility`, and `final_state` independent.
-   - `SELECTABLE` requires policy eligibility, benchmark reliability, Reality PASS, and clean cleanup.
-   - Reality PASS never overrides a policy rejection.
-   - Keep REALITY protocol compliance separate from TLS transport reliability. A 100% TLS success rate does not compensate for TLS <1.3, missing h2, certificate/identity failure, or a confirmed cross-site redirect.
-   - Produce `report.md` as fixed modules: (A) one-line conclusion, (B) incumbent health card, (C) complete Top-5 decision table, (D) per-candidate detail cards and model-commentary facts, (E) how-to-choose guidance, (F) search quality, (G) adaptive pipeline statistics, and (H) full audit comparison.
-   - Produce `decision-summary.json` and a recommendation-sorted, multi-dimensional comparison containing at least five distinct measured domains when at least five exist. Include the incumbent baseline even if this makes the detailed comparison longer than five rows.
-   - The visible Top-5 decision table must show all five `SELECTABLE` domains when five exist. Never silently compress five results to three.
-   - For every Top-5 candidate expose recommendation grade, REALITY Protocol state, observed TLS version/ALPN, Policy and Final state, Reality result, TLS reliability, P50/P95/MAD, performance grade, runtime-stability grade, Network Affinity, evidence-bounded long-term-risk estimate, front-door/platform, ASN/organization when known, P50 delta vs incumbent, candidate confidence, search confidence, overall recommendation confidence, and ranking rationale.
-   - Treat P50 differences inside the frozen `p50_equivalence_ms` window (default 2 ms) as near-ties; explain the order using P95, MAD, runtime stability and long-term-risk signals rather than tiny P50 differences.
-   - Separate candidate confidence from search coverage confidence. A SPARSE search may still produce HIGH-confidence individual candidates, but must not be described as exhaustive.
-   - The calling model must read `report.md`, `decision-summary.json`, `top5.json`, and `incumbent-assessment.json`, then write evidence-bound Chinese commentary for each displayed Top-5 candidate and a concise “how to choose” recommendation. Never invent historical uptime, future stability, unseen CDN/ASN relationships, or client-to-VPS performance.
-   - If fewer than five measured domains exist, report all and emit `INSUFFICIENT_COMPARISON_DOMAINS`; never fabricate rows.
-   - Read `references/result-schema.md` and `references/reporting.md`.
-
-## Default QUICK profile and AUDIT override
-
-Default QUICK:
-
-- source pool cap: 520
-- validated hostname cap: 240
-- coverage goal: 200
-- source stop target before CT backfill: 300 records
-- eligibility pool: 80
-- fast pool: 36
-- fast samples: 3
-- initial deep pool: 10
-- deep pool cap after adaptive refill: 18
-- deep refill batch: 4
-- deep total samples: 20, including reused Fast samples
-- target selectable SNI count: 5
-- Reality candidate cap: 16
-- candidate Reality requirement: 5/5, fail-fast after the first clean failure
-- comparison minimum: 5 distinct measured domains when available
-- IP metadata budget: 160 unique IPv4s
-- target latency goal: P50 <=60 ms, advisory only
-- effective eligible-survivor goal: 15
-- Network Affinity passive sample: <=24 IP lookups across <=4 announced prefixes, metadata-only/no active scan
-- lane opportunity reserves: Network Affinity / General Regional / Institutional
-- passive CT failure budget: 3 consecutive base-query failures
-- fixed candidate port: 443
-
-AUDIT (`--profile audit`) restores the broad discovery/eligibility profile: source cap 1,200, validated cap 600, coverage goal 400, eligibility 120, Fast 50 x 5, initial Deep 10 x 20 total (still reusing Fast samples), adaptive Deep cap 20, refill batch 4, and up to 18 Reality candidates while targeting five selectable results.
-
-## Required artifacts
-
-A normal controller invocation writes lifecycle evidence first and, after freeze, the selection artifacts into its dedicated run directory:
-
-```text
-worker-lifecycle.json
-frozen-run.json
-target-frozen-run.json
-target-result.json
-target-preflight.json
-candidate-discovery.json
-network-affinity-search.json
-regional-candidates.json  # compatibility alias
-candidates.json
-probe-pool.json
-eligibility.json
-fast-benchmark.json
-deep-benchmark.json
-reality-results.json
-comparison.json
-decision-summary.json
-incumbent-assessment.json
-top5.json
-rejections.csv
-run-metadata.json
-stage-status.tsv
-report.md
-```
-
-If worker readiness fails, `worker-lifecycle.json`, `run-metadata.json`, `stage-status.tsv`, and blocked result files may exist **without** `frozen-run.json`; this is intentional.
-
-## Selection vs maintenance
-
-Normal `SELECTION MODE` may manage only the Skill's fixed worker runtime. Unknown path conflicts, privilege/SSH repair, dependency installation, source edits, production changes, and Git/project edits remain `MAINTENANCE / REPAIR MODE`. Read `references/maintenance.md`.
-
-## Bundled scripts
-
-- `scripts/controller_run.py`: compact v4.4 entrypoint around the stable controller runtime plus deterministic decision postprocessing.
-- `scripts/controller_runtime.py`: stable local inventory resolution, pre-freeze worker readiness, frozen QUICK/AUDIT job, fixed measurement orchestration, and base artifacts.
-- `scripts/controller_core.py`: compact pure profile/seed/frozen-job helpers.
-- `scripts/decision_postprocess.py`: creates `decision-summary.json`, enriches `top5.json`, and normalizes the final v4.4 report after target measurement.
-- `scripts/worker_lifecycle.py`: controller-side identity probe, fixed payload creation, bounded SCP/SSH bootstrap orchestration.
-- `scripts/worker_bootstrap.py`: target-side fixed-path atomic installer/upgrade with legacy recognition, backups, hash verification, and rollback.
-- `scripts/target_worker.py`: fixed target-side adaptive orchestrator and incumbent assessment.
-- `scripts/target_discovery.py`: bounded target-side multi-lane General Regional / Network Affinity / Institutional / passive discovery.
-- `scripts/target_probe.py`: TLS/HEAD/network evidence and public-CDN/shared-platform classification.
-- `scripts/benchmark.py`: interleaved fast/deep benchmarking and policy-first ranking.
-- `scripts/reality_selftest.py`: isolated local Reality integration and sanitized failure evidence.
-- `scripts/report.py`: small decision/report facade.
-- `scripts/decision_grades.py` and `scripts/decision_view.py`: deterministic evidence-bound grading, confidence, tradeoff, and ranking rationale.
-- `scripts/report_format.py` and `scripts/report_render.py`: normalized Chinese decision report and complete Top-5 display.
-- `scripts/common.py`: validation, stats, v4 contract constants, worker manifest, safe JSON helpers.
-- `scripts/reality-sni-target-worker`: fixed `identity`/`run` deployment wrapper.
-
-For migration semantics, read `references/migration-v4.3.5-to-v4.4.md`.
-
-Read `references/dependencies.md` before any dependency installation. Normal selection never installs system packages.
+Controller: `controller_run.py`, `controller_runtime.py`, `controller_core.py`, decision/report modules and worker lifecycle/bootstrap modules. Target worker: fixed six-file manifest plus hash-verified auxiliary publication payloads for large modules. See `references/architecture.md`, `references/dependencies.md`, `references/maintenance.md`, and `references/migration-v4.4-to-v4.5.md`.

@@ -9,7 +9,7 @@ from report import build_decision_view, render_report
 
 
 def postprocess_run(run_dir: Path) -> bool:
-    """Derive v4.4 decision artifacts from already target-measured evidence."""
+    """Derive v4.5 decision artifacts from already target-measured evidence."""
     result_path = run_dir / "target-result.json"
     if not result_path.is_file():
         return False

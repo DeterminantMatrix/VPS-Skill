@@ -1,4 +1,4 @@
-# Managed worker lifecycle v4.4
+# Managed worker lifecycle v4.5
 
 The user selects a VPS; the Skill owns readiness of its own fixed target worker. Worker readiness is a **pre-freeze control-plane step**, not candidate measurement.
 
@@ -11,7 +11,7 @@ The user selects a VPS; the Skill owns readiness of its own fixed target worker.
 /usr/local/bin/reality-sni-target-worker identity
 ```
 
-3. Require protocol 4, implementation 4.4, the exact six-file worker manifest, and the exact reviewed wrapper hash.
+3. Require protocol 4, implementation 4.5, the exact six-file worker manifest, and the exact reviewed wrapper hash.
 4. If exact, continue without writes.
 5. If absent/stale/legacy and `--worker-bootstrap auto` is enabled, bootstrap or upgrade only the managed worker paths.
 6. Probe identity again. Freeze the SNI job only after exact readiness.
@@ -32,6 +32,9 @@ Automatic lifecycle management may write only:
   benchmark.py
   reality_selftest.py
   target_worker.py
+  target_discovery.py.gz
+  target_probe.py.gz
+  target_worker.py.gz.b64.000..004
   .managed.json
 
 /usr/local/bin/reality-sni-target-worker
@@ -65,10 +68,10 @@ The target-side bootstrap:
 - accepts only the fixed payload member set;
 - rejects symlinks, nested paths, extra files, oversized files, or hash mismatch;
 - stages the worker under `/opt` and the wrapper under `/usr/local/bin`;
-- verifies the staged six-file manifest and wrapper SHA-256;
+- verifies the staged six-file manifest, fixed auxiliary payload SHA-256 values, and wrapper SHA-256;
 - backs up an existing managed worker before replacement;
 - atomically activates staged paths;
-- verifies hashes again after activation;
+- verifies the six-file manifest, auxiliary payload hashes, and wrapper hash again after activation;
 - attempts rollback if activation verification fails.
 
 A successful lifecycle result records `INSTALLED`, `UPGRADED`, or `ALREADY_READY` plus manifest and backup metadata in `worker-lifecycle.json`.

@@ -1,51 +1,49 @@
-# Final reporting contract v4.4
+# Final reporting contract v4.5
 
 The user-facing answer is a decision aid, not a compressed benchmark log. Read `report.md`, `decision-summary.json`, `top5.json`, and `incumbent-assessment.json` before answering.
 
 ## Mandatory modules
 
-Use this order and do not silently omit modules:
+Use this order:
 
-1. **一句话结论** — run status, incumbent verdict, best alternative, selectable count, candidate/search/overall confidence.
-2. **当前 SNI 健康卡** — REALITY Protocol, observed TLS/ALPN, Policy, Reality control, TLS reliability/performance, Network Affinity, and explicit tradeoff versus best alternative.
-3. **Top 5 核心决策表** — show all five when five `SELECTABLE` exist; never compress to three.
-4. **候选详细卡与模型评语** — one card per displayed candidate with protocol evidence, safety/policy, Reality 5/5, TLS reliability, P50/P95/MAD, runtime stability, Network Affinity, operational-risk heuristic, confidence, and ranking rationale.
-5. **怎么选** — one default choice, best backup, lowest-P95 option, best Network-Affinity option when known, and explicit partial-choice warning when fewer than five exist.
-6. **搜索质量与 Network Affinity** — validated breadth, effective eligible-survivor quality, active discovery lanes, source failures, target ASN/prefix, and the SAME_ASN discovery-to-selection funnel; explain the distinction between candidate confidence and search confidence.
-7. **自适应流水线统计** — initial Deep, refill rounds/candidates, total Deep, Reality tested/passed, adaptive stop reason, final selectable count.
-8. **全部比较证据** — audit table; non-SELECTABLE rows must never be presented as recommendations.
+1. **一句话结论** — run status, incumbent verdict, best alternative, independent selectable-family count, quality-target state, Candidate / Run Coverage / Global Optimality / Overall confidence.
+2. **当前 SNI 健康卡** — protocol, TLS/ALPN, policy, Reality control, TLS transport reliability, performance and Network Affinity.
+3. **Top 5 核心决策表** — one slot per registrable-domain family by default; display all five independent families when available.
+4. **候选详细卡** — family, same-family alternatives, Protocol, Policy, Reality, TLS reliability, P50/P95/MAD, latency consistency, Network Affinity, operational-risk heuristic, confidence and ranking rationale.
+5. **怎么选** — default choice, backup, best P95, best affinity, and explicit portfolio/quality limitations.
+6. **搜索质量与 Network Affinity** — breadth, effective survivor quality, lane/source reserves, saturation, source errors, target ASN/prefix and hostname/family/endpoint affinity funnel.
+7. **自适应流水线统计** — baseline-only, initial Deep, quality extension, refill, total Deep, Reality tested/passed, stop reason, family count and quality-target state.
+8. **全部比较证据** — audit table; non-SELECTABLE rows are never recommendations.
 
-## Required Top-5 fields
+## Independent family rule
 
-Include at least:
+`example.com` and `www.example.com` are two measurable hostnames but normally one decision family. Keep the stronger hostname in the main Top-5 slot and retain measured same-family alternatives in detail/audit evidence. Do not claim five independent choices when only five hostnames from fewer root domains passed.
 
-- rank and SNI;
-- recommendation tier plus grade/label;
-- REALITY Protocol state;
-- observed TLS version and ALPN;
-- Policy grade and final state;
-- Reality result;
-- TLS reliability grade and success rate;
-- P50, P95, MAD;
-- runtime-stability grade;
-- Network Affinity grade/code;
-- durability/operational-risk estimate;
-- front-door/platform and ASN/organization when known;
-- P50 difference versus incumbent;
-- candidate/search/overall confidence;
-- ranking rationale.
+## Confidence terminology
+
+Keep these separate:
+
+- **Candidate Confidence** — how complete/reliable this candidate's own measurements are.
+- **Run Coverage Confidence** — whether the configured bounded search executed with enough breadth/eligible yield/lane diversity.
+- **Global Optimality Confidence** — how much evidence supports being near the best candidate available in the broader search space. Hard-cap saturation, source failures, missing lanes, or an unmet quality goal downgrade this dimension.
+- **Overall Recommendation Confidence** — conservative synthesis used for the recommendation.
+
+Do not use `HIGH` Run Coverage as a synonym for exhaustive or global-optimum search.
+
+## Reliability and consistency terminology
+
+Do not call one-run latency dispersion generic "runtime stability". Display separately:
+
+- TLS transport reliability;
+- Reality reliability (5/5 when selectable);
+- observed **Latency Consistency** from MAD/tail spread.
+
+Operational/durability risk must not be increased solely because P95-P50 or MAD was large in one run. Keep that latency evidence in performance/consistency.
 
 ## Evidence-bound model commentary
 
-The rule engine decides eligibility and ranking. The language model only explains structured facts. For each displayed candidate write 1-3 concise Chinese sentences covering why it is recommended, its main measured limitation/risk, and any near-tie reason.
+The rule engine decides eligibility/ranking. The language model only explains structured facts. Never invent historical uptime, organizational reputation, future DNS/hosting stability, unseen ASN/CDN relationships, or client-to-VPS performance.
 
-Never invent historical uptime, organizational reputation, future DNS/hosting stability, unseen ASN/CDN relationships, or client-to-VPS performance.
+Within the frozen 2 ms P50 near-tie window, explain ordering via P95, MAD/Latency Consistency, Network Affinity, front-door evidence and operational-risk signals rather than tiny median differences.
 
-## Near-tie rule
-
-Within the frozen `p50_equivalence_ms` window (default 2 ms), do not claim a tiny P50 difference is meaningful. Explain ranking through P95, MAD, Network Affinity, runtime stability, front-door evidence, and operational-risk signals.
-
-
-## Discovery-provenance rule
-
-Do not describe Institutional provenance as a REALITY eligibility requirement. Display discovery lanes/sources when useful. If no SAME_ASN candidate is selectable, explain whether the affinity lane found no hostname or whether discovered SAME_ASN candidates were eliminated later by Protocol/Policy/Reality evidence.
+Institutional provenance remains a discovery preference, never a REALITY eligibility requirement. If no SAME_ASN family is selectable, explain whether none was discovered or discovered candidates were eliminated later.

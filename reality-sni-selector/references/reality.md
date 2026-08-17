@@ -1,4 +1,4 @@
-# LOCAL_REALITY_INTEGRATION_TEST v4.4
+# LOCAL_REALITY_INTEGRATION_TEST v4.5
 
 This stage validates the local sing-box server/client fixture on the target VPS. It is not an end-to-end test from a real remote client.
 
@@ -18,10 +18,12 @@ Prefer reviewed fixed ELF paths before PATH. Require a regular executable ELF fi
 
 - Only `ELIGIBLE` Deep survivors can enter candidate Reality testing. `REVIEW_REQUIRED` rows cannot become `SELECTABLE` and do not consume candidate Reality budget.
 - Start with the initial Deep survivors in recommendation order.
-- Stop immediately after five `SELECTABLE` candidates are obtained.
-- If fewer than five are obtained and eligible Fast survivors remain, Deep-refill the next deterministic batch of four, then continue Reality testing.
-- QUICK stops when five are found, Fast survivors/Deep cap are exhausted, a dirty state occurs, or 16 candidate Reality tests have been attempted.
-- AUDIT uses the same rule with a 20-row Deep cap and 18 candidate Reality-test cap.
+- Count the visible portfolio by independent registrable-domain family. A same-family apex/`www` pass may be retained as a family alternative but does not fill another main Top-5 slot.
+- Continue while either fewer than five independent `SELECTABLE` families exist or no selectable candidate meets the frozen quality target.
+- If either goal remains unmet and eligible Fast survivors remain, Deep-refill the next deterministic batch of four, preferring new families, then continue Reality testing.
+- QUICK stops with normal success when both portfolio and quality targets are met; otherwise it continues until Fast survivors/Deep cap are exhausted, a dirty state occurs, or 20 candidate Reality tests have been attempted. QUICK Deep cap is 22 total rows including incumbent.
+- AUDIT uses the same rule with a 24-row Deep cap and 22 candidate Reality-test cap.
+- Five valid independent families with no quality-target candidate remain selectable; after bounded exhaustion return `SUCCESS_QUALITY_BELOW_TARGET` rather than pretending the quality target was met.
 
 For each candidate:
 
@@ -31,7 +33,7 @@ For each candidate:
 - after the first clean transport failure, stop that candidate because 5/5 is no longer possible;
 - cleanup failure remains run-level `TARGET_DIRTY_STATE`.
 
-Record `adaptive_refill.stop_reason`, refill rounds/counts, total Deep rows, Reality tested/passed, and final selectable count.
+Record `adaptive_refill.stop_reason`, refill rounds/counts, total Deep rows, Reality tested/passed, hostname/family selectable counts, quality-target state, and final family alternatives.
 
 ## Sanitized failure evidence
 

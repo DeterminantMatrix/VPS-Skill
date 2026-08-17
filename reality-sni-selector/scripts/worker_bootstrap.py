@@ -31,12 +31,20 @@ TARGET_FILES = (
 AUX_FILES = (
     "target_discovery.py.gz",
     "target_probe.py.gz",
-    "target_worker.py.gz",
+    "target_worker.py.gz.b64.000",
+    "target_worker.py.gz.b64.001",
+    "target_worker.py.gz.b64.002",
+    "target_worker.py.gz.b64.003",
+    "target_worker.py.gz.b64.004",
 )
 AUX_SHA256 = {
-    "target_discovery.py.gz": "83d075c434f4ffcf441cb5ba8921786fdc4a2c7b7470edb4af7cb1a2bf663ff3",
-    "target_probe.py.gz": "901418fc2e306f7b5824b46d90587a3125daf2e70a8bb04b7c71eff109d7dcad",
-    "target_worker.py.gz": "58c05510c4016dd115b78c47213aaafca5037abaab9a9a15ee73f10ebdbb5fad",
+    "target_discovery.py.gz": "f1e1e4b8290b0163e093263db3f284b5b4c4fffb39091f1382af7195bf2ba25c",
+    "target_probe.py.gz": "5cd9056453d2532ac5fd31fed929610994f03444c55c943ebf9b685ab9a9cb98",
+    "target_worker.py.gz.b64.000": "32242b5904d7308220257d0f357e8425ac6912a96f61b84ed394f743b4934f57",
+    "target_worker.py.gz.b64.001": "0d2e863ec34cef710eb93ad43a8c296d875c5bc0ff52caa01bdce09da56e8d45",
+    "target_worker.py.gz.b64.002": "d2a18568ee4e3b6117186c3e50cb971989d2daac5d7413a7dfb31cd5d7810cff",
+    "target_worker.py.gz.b64.003": "f6e5c031aa978b1a85f15a38dd7593e51c92a00f879c15de4e10860540c38c90",
+    "target_worker.py.gz.b64.004": "6027755a640659ce9a9581ca11671d58b6fe5cfc93b6a13ab1533267a2a04a82",
 }
 WRAPPER_NAME = "reality-sni-target-worker"
 DEFAULT_INSTALL_DIR = Path("/opt/reality-sni-selector")

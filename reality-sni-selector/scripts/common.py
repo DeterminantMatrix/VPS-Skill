@@ -25,7 +25,7 @@ TWO_LEVEL_SUFFIXES = {
 JOB_SCHEMA_VERSION = 4
 WORKER_PROTOCOL = 4
 PROFILE_NAME = "target-measured-v4"
-IMPLEMENTATION_VERSION = "4.4"
+IMPLEMENTATION_VERSION = "4.5"
 TARGET_WORKER_FILES = (
     "common.py",
     "target_discovery.py",
@@ -37,7 +37,11 @@ TARGET_WORKER_FILES = (
 TARGET_WORKER_AUX_FILES = (
     "target_discovery.py.gz",
     "target_probe.py.gz",
-    "target_worker.py.gz",
+    "target_worker.py.gz.b64.000",
+    "target_worker.py.gz.b64.001",
+    "target_worker.py.gz.b64.002",
+    "target_worker.py.gz.b64.003",
+    "target_worker.py.gz.b64.004",
 )
 
 PROTOCOL_HARD_CODES = frozenset({
@@ -168,7 +172,7 @@ def fetch_bytes(url: str, *, timeout: float = 8.0, max_bytes: int = 1_000_000, h
     request = urllib.request.Request(
         url,
         data=data,
-        headers={"User-Agent": "reality-sni-selector/4.4", **(headers or {})},
+        headers={"User-Agent": "reality-sni-selector/4.5", **(headers or {})},
         method="POST" if data is not None else "GET",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -196,7 +200,7 @@ def source_priority(sources: list[str]) -> int:
     # Source order is a weak prior only. Eligibility is determined by protocol,
     # safety, reliability and Reality evidence; institutional origin is never a
     # prerequisite. Network-affinity and general-regional discovery are first-
-    # class candidate lanes in v4.4.
+    # class candidate lanes in v4.5.
     order = {
         "incumbent": 0,
         "seed": 1,

@@ -1,4 +1,4 @@
-# Architecture v4.4
+# Architecture v4.5
 
 ## Control plane vs measurement plane
 
@@ -43,7 +43,7 @@ The job freezes:
 
 - `schema_version: 4`
 - `worker_protocol: 4`
-- `implementation_version: 4.4`
+- `implementation_version: 4.5`
 - `expected_worker_manifest`
 
 The readiness probe additionally verifies the reviewed wrapper SHA-256. The measurement worker repeats protocol/version/manifest validation before candidate network traffic.
@@ -65,10 +65,10 @@ The readiness probe additionally verifies the reviewed wrapper SHA-256. The meas
 | final artifact rendering | yes | no |
 
 
-## Multi-lane discovery v4.4
+## Multi-lane discovery v4.5
 
-The target worker treats institutional websites as one preference lane rather than the candidate universe. General Regional OSM website metadata, Network Affinity routing/passive data, Institutional metadata, and cross-lane CT expansion are combined before DNS validation. The built-in affinity lane uses routing metadata plus bounded third-party passive IP lookups only; it never actively sweeps BGP prefixes.
+The target worker treats institutional websites as one preference lane rather than the candidate universe. General Regional OSM website metadata, Network Affinity routing/passive data, Institutional metadata, and cross-lane CT expansion are combined before DNS validation. Source-level and validated-level lane reserves are applied before global caps so a large General Regional result cannot starve smaller lanes; unused reserve returns to common fill. Common social/profile/aggregator URLs are filtered only from regional/institutional metadata. The built-in affinity lane uses routing metadata plus bounded third-party passive IP lookups only; it never actively sweeps BGP prefixes.
 
-## Adaptive selection and decision layer v4.4
+## Adaptive selection and decision layer v4.5
 
-The target worker owns adaptive measurement: initial Deep, Reality, and bounded Deep refill from already-Fast-measured eligible survivors until five SELECTABLE results are found or fixed caps are exhausted. The controller deterministically derives decision dimensions/ranking rationale from target-measured evidence and renders `decision-summary.json` and modular `report.md`. The calling model may explain those fields in Chinese, but must follow `reporting.md` and may not replace measured evidence with outside assumptions.
+The target worker owns adaptive measurement: initial Deep, optional one-time quality discovery extension, Reality, and bounded Deep refill. Normal early success requires five independent registrable-domain families **and** at least one candidate meeting the frozen quality target. Same-family hostnames remain alternatives rather than duplicate Top-5 slots. If the bounded search finds five families but misses the quality target, it reports `SUCCESS_QUALITY_BELOW_TARGET`. The controller deterministically derives Candidate / Run Coverage / Global Optimality confidence, ranking rationale and modular decision artifacts from target-measured evidence.

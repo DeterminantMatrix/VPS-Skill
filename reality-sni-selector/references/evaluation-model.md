@@ -1,4 +1,4 @@
-# REALITY target evaluation model v4.4
+# REALITY target evaluation model v4.5
 
 This Skill separates upstream REALITY target requirements from its own conservative operational policy. Do not describe project-specific heuristics as protocol requirements.
 
@@ -58,12 +58,13 @@ This is a local target-VPS integration test, not proof of a real client-to-VPS n
 
 After L0/L1 pass:
 
-- overall Deep TLS success must be >=95%;
+- overall Deep TLS transport success must be >=95%;
 - sufficiently sampled per-IP success must be >=90%;
-- compare P50, P95, MAD, tail spread, per-IP consistency, and DNS volatility;
+- Reality reliability is reported separately and is 5/5 for a selectable candidate;
+- P50, P95, MAD and tail spread form the performance / **Latency Consistency** view;
 - use the frozen 2 ms P50 near-tie band to prevent tiny median differences from dominating the recommendation.
 
-Keep protocol compliance separate from TLS reliability. A TLS transport can be 100% reliable and still fail REALITY protocol minimum because it negotiates TLS 1.2 or lacks H2.
+Do not label high one-run MAD/tail spread as generic service instability. A candidate may have TLS reliability A+ and Reality 5/5 while having Latency Consistency C. Keep Protocol Compliance, TLS Reliability, Reality Reliability, and Latency Consistency separate.
 
 ## L4 — operational bonuses and heuristics
 
@@ -71,7 +72,7 @@ These may be shown as information/tie-break evidence but are not hard gates unle
 
 - OCSP Stapling — upstream bonus;
 - X25519MLKEM768 support — current Xray can use it when the target supports it;
-- durability/operational-risk heuristic derived from current DNS, front-door, source, organization, and stability evidence.
+- durability/operational-risk heuristic derived from current DNS, front-door, source/provenance, organization, and review evidence. Single-run latency dispersion is deliberately excluded from durability risk.
 
 The current worker does not require OCSP or post-quantum key exchange for selection. Do not invent either value when it was not measured.
 

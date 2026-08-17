@@ -38,12 +38,16 @@ class ReportTests(unittest.TestCase):
             "tls_grade": "A+",
             "performance_grade": "A+",
             "runtime_stability_grade": "A",
+            "latency_consistency_grade": "A",
+            "candidate_family": f"d{i}.example",
             "network_affinity": {"grade": "A+", "code": "SAME_ASN", "rank": 0},
             "network_affinity_grade": "A+",
             "network_affinity_code": "SAME_ASN",
             "durability_risk": "LOW",
             "candidate_confidence": "HIGH",
             "search_confidence": "HIGH",
+            "run_coverage_confidence": "HIGH",
+            "global_optimality_confidence": "HIGH",
             "overall_recommendation_confidence": "HIGH",
             "decision_reasons": ["POLICY_PASS", "REALITY_5_OF_5_PASS"],
             "ranking_rationale": "完整通过并按尾延迟与稳定性排序。",
@@ -56,12 +60,15 @@ class ReportTests(unittest.TestCase):
         comparison = [self._row(i + 1) for i in range(n)]
         top = comparison[:5]
         decision = {
-            "reporting_contract": "v4.4",
+            "reporting_contract": "v4.5",
             "recommended_sni": top[0]["hostname"] if top else None,
             "recommended_grade": top[0]["recommendation_grade"] if top else None,
             "recommended_label": top[0]["recommendation_label"] if top else None,
             "candidate_confidence": "HIGH" if top else "LOW",
             "search_confidence": "HIGH",
+            "run_coverage_confidence": "HIGH",
+            "global_optimality_confidence": "HIGH",
+            "quality_target_met": True,
             "overall_recommendation_confidence": "HIGH" if top else "LOW",
             "p50_equivalence_ms": 2.0,
         }
@@ -69,8 +76,8 @@ class ReportTests(unittest.TestCase):
             "status": "SUCCESS",
             "frozen_run": {"region": "US", "incumbent": "old.example", "profile": {"run_mode": "quick"}},
             "preflight": {"observed_egress_ip": "155.254.127.55"},
-            "coverage": {"profile": "quick", "status": "GOOD", "validated": 200, "goal": 200, "selection_maturity": "QUICK_CONFIDENT"},
-            "counts": {"discovered": 200, "eligibility_selected": 80, "eligible": 30, "review_required": 4, "hard_rejected": 46, "fast_benchmarked": 36, "deep_benchmarked": 10, "deep_reused_samples": 30, "deep_new_samples": 170, "reality_tested": 5, "reality_passed": 5, "selectable": len(top), "selectable_target": 5},
+            "coverage": {"profile": "quick", "status": "GOOD", "breadth_status": "GOOD", "quality_status": "GOOD", "validated": 200, "goal": 200, "effective_eligible": 30, "eligible_goal": 15, "active_discovery_lanes": ["general_regional", "institutional", "network_affinity"], "lane_counts": {"general_regional": 100, "institutional": 60, "network_affinity": 20}, "source_errors": [], "saturation": {"any_cap_hit": False}, "selection_maturity": "QUICK_CONFIDENT"},
+            "counts": {"discovered": 200, "eligibility_selected": 80, "eligible": 30, "review_required": 4, "hard_rejected": 45, "baseline_only": 1, "fast_benchmarked": 36, "deep_benchmarked": 10, "deep_reused_samples": 30, "deep_new_samples": 170, "reality_tested": 5, "reality_passed": 5, "selectable": len(top), "selectable_families": len(top), "selectable_target": 5, "quality_target_met": True},
             "decision_summary": decision,
             "incumbent_assessment": {"hostname": "old.example", "code": "KEEP", "verdict": "继续使用", "confidence": "HIGH", "reasons": ["CURRENT_SNI_PASSES_POLICY_RELIABILITY_AND_REALITY"], "tradeoff_text": "当前 SNI 与首选性能接近。", "metrics": {"success_rate": 1.0, "p50_ms": 60, "p95_ms": 70, "mad_ms": 2, "reality_control": "PASS", "hard_rejections": [], "protocol_compliance": {"state": "PASS", "tls13": True, "h2": True, "certificate": "PASS", "redirect_policy": "PASS", "per_ip": {}}, "tls_versions": ["TLSv1.3"], "alpn_protocols": ["h2"], "network_affinity": {"grade": "A+", "code": "SAME_ASN", "rank": 0}}},
             "comparison": comparison,
@@ -88,10 +95,11 @@ class ReportTests(unittest.TestCase):
 
     def test_report_exposes_decision_dimensions_and_model_commentary_rule(self):
         text = render_report(self._result())
-        self.assertIn("运行稳定性", text)
+        self.assertIn("延迟一致性", text)
         self.assertIn("Operational risk", text)
-        self.assertIn("候选自身置信度", text)
-        self.assertIn("搜索覆盖置信度", text)
+        self.assertIn("Candidate", text)
+        self.assertIn("Run Coverage", text)
+        self.assertIn("Global Optimality", text)
         self.assertIn("模型评语规则", text)
         self.assertIn("排名理由", text)
         self.assertIn("REALITY Protocol", text)
@@ -106,7 +114,7 @@ class ReportTests(unittest.TestCase):
     def test_report_never_fabricates_rows(self):
         text = render_report(self._result(1))
         self.assertIn("FEWER_THAN_FIVE_SELECTABLE", text)
-        self.assertIn("INSUFFICIENT_COMPARISON_DOMAINS", text)
+        self.assertIn("INSUFFICIENT_COMPARISON_FAMILIES", text)
 
 
 if __name__ == "__main__":

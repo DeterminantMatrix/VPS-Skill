@@ -1,6 +1,6 @@
-# Target worker installation / automatic lifecycle v4.4
+# Target worker installation / automatic lifecycle v4.5
 
-Normal v4.4 selection owns readiness of its reviewed fixed worker. Manual predeployment is no longer required when the existing SSH alias can write the fixed paths.
+Normal v4.5 selection owns readiness of its reviewed fixed worker. Manual predeployment is no longer required when the existing SSH alias can write the fixed paths.
 
 See `worker-lifecycle.md` for the automatic sequence.
 
@@ -17,15 +17,15 @@ reality_selftest.py
 target_worker.py
 ```
 
-For connector-safe publication, v4.4 also installs three fixed auxiliary source payloads in the same managed directory:
+For deterministic connector-safe publication, v4.5 installs three logical auxiliary source payloads in the same managed directory. The two smaller payloads are `.py.gz`; the larger target-worker payload is split into five fixed base64 chunks, so seven auxiliary files exist on disk:
 
 ```text
 target_discovery.py.gz
 target_probe.py.gz
-target_worker.py.gz
+target_worker.py.gz.b64.000..004
 ```
 
-The three small Python entry files verify the decompressed source SHA-256 before execution. The bootstrap independently verifies the gzip payload SHA-256 before activation, so these auxiliary files cannot bypass the six-file manifest trust chain.
+The three small Python entry files verify the reconstructed/decompressed source SHA-256 before execution. The bootstrap independently verifies every auxiliary-file SHA-256 before activation, so the chunked publication layout cannot bypass the six-file manifest trust chain.
 
 The managed directory also contains `.managed.json` with protocol/version/manifest/wrapper-hash metadata.
 
