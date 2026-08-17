@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from common import edge_priority, policy_priority, source_priority, stats
+from common import PROTOCOL_HARD_CODES, edge_priority, policy_priority, source_priority, stats
 from target_probe import resolve_ipv4_observations, tls_probe_ip
 
 
@@ -82,6 +82,7 @@ def benchmark_candidates(
             "distance_km": candidate.get("distance_km"),
             "eligibility": candidate.get("eligibility"),
             "front_door": candidate.get("front_door"),
+            "protocol_compliance": candidate.get("protocol_compliance"),
             "warnings": list(candidate.get("warnings", [])),
             "review": list(candidate.get("review", [])),
             "hard_rejections": list(candidate.get("hard_rejections", [])),
@@ -94,11 +95,21 @@ def benchmark_candidates(
             "successes": len(ok),
             "success_rate": round(len(ok) / len(rows), 4) if rows else 0.0,
             "per_ip": per_ip,
+            "tls_versions": sorted({str(r.get("tls_version")) for r in ok if r.get("tls_version")}),
+            "alpn_protocols": sorted({str(r.get("alpn")) for r in ok if r.get("alpn")}),
             **stats(values, include_tail=deep),
         }
         results.append(result)
     return results
 
+
+
+def p50_equivalence_band(value: Any, width_ms: float = 2.0) -> int:
+    """Bucket tiny P50 differences so tail/stability can break near-ties."""
+    if value is None:
+        return 10**9
+    width = max(0.5, float(width_ms))
+    return int(round(float(value) / width))
 
 def fast_rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
     p50 = row.get("p50_ms") if row.get("p50_ms") is not None else 1e9
@@ -107,12 +118,26 @@ def fast_rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
     return (
         policy_priority(row.get("eligibility")),
         -float(row.get("success_rate") or 0.0),
-        float(p50),
+        p50_equivalence_band(p50),
         float(mad),
+        float(p50),
         edge_priority(front),
         source_priority(row.get("sources") or []),
         row["hostname"],
     )
+
+
+def _tail_risk_bucket(p50: Any, p95: Any) -> int:
+    if p50 is None or p95 is None:
+        return 9
+    spread = max(0.0, float(p95) - float(p50))
+    if spread <= 10.0:
+        return 0
+    if spread <= 20.0:
+        return 1
+    if spread <= 35.0:
+        return 2
+    return 3
 
 
 def deep_rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
@@ -125,15 +150,18 @@ def deep_rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
         for v in (row.get("per_ip") or {}).values()
         if (v.get("samples") or 0) >= 3
     )
+    affinity = row.get("network_affinity") or {}
     return (
         policy_priority(row.get("eligibility")),
         -float(row.get("success_rate") or 0.0),
-        float(p50),
+        p50_equivalence_band(p50),
+        _tail_risk_bucket(p50, p95),
+        int(affinity.get("rank", 9)),
         float(p95),
         float(mad),
+        float(p50),
         int(inconsistent),
         edge_priority(front),
-        -int(bool(row.get("exact_target_asn"))),
         source_priority(row.get("sources") or []),
         row["hostname"],
     )
@@ -141,6 +169,11 @@ def deep_rank_key(row: dict[str, Any]) -> tuple[Any, ...]:
 
 def apply_deep_policy(row: dict[str, Any], incumbent: bool = False) -> dict[str, Any]:
     hard = set(row.get("hard_rejections") or [])
+    successful = [sample for sample in (row.get("samples") or []) if sample.get("success")]
+    if successful and any(sample.get("tls_version") != "TLSv1.3" for sample in successful):
+        hard.add("HARD:REALITY_MIN_TLS13")
+    if successful and any(sample.get("alpn") != "h2" for sample in successful):
+        hard.add("HARD:REALITY_MIN_H2")
     if not incumbent:
         if (row.get("success_rate") or 0.0) < 0.95:
             hard.add("HARD:TLS_SUCCESS_LT_95")
@@ -152,5 +185,14 @@ def apply_deep_policy(row: dict[str, Any], incumbent: bool = False) -> dict[str,
             hard.add("HARD:IP_SUCCESS_LT_90")
     row = dict(row)
     row["hard_rejections"] = sorted(hard)
+    protocol = dict(row.get("protocol_compliance") or {})
+    protocol_failures = sorted(set(protocol.get("hard_failures") or []) | (hard & PROTOCOL_HARD_CODES))
+    if protocol_failures:
+        protocol["state"] = "FAIL"
+        protocol["hard_failures"] = protocol_failures
+    if successful:
+        protocol["tls13"] = all(sample.get("tls_version") == "TLSv1.3" for sample in successful)
+        protocol["h2"] = all(sample.get("alpn") == "h2" for sample in successful)
+    row["protocol_compliance"] = protocol
     row["eligibility"] = "BASELINE_ONLY" if incumbent and hard else "HARD_REJECTED" if hard else row.get("eligibility", "ELIGIBLE")
     return row

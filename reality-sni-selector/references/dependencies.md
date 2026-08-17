@@ -14,7 +14,7 @@ Required only when automatic worker bootstrap/upgrade is needed:
 
 - OpenSSH `scp` client
 
-If the exact v4.2 worker is already ready, no transfer is performed.
+If the exact v4.3.5 worker is already ready, no transfer is performed.
 
 ## Target worker
 
@@ -34,4 +34,4 @@ If `dig` is absent, edge evidence may become `REVIEW:EDGE_UNKNOWN`; missing tool
 
 ## Installation boundary
 
-v4.2 may bootstrap or upgrade only its own fixed worker files; this is not a system-package installation. Installing missing Python/curl/sing-box/dig packages, changing sudo/SSH privileges, or repairing unrelated system state remains a separate maintenance action.
+v4.3.5 may bootstrap or upgrade only its own fixed worker files; this is not a system-package installation. Installing missing Python/curl/sing-box/dig packages, changing sudo/SSH privileges, or repairing unrelated system state remains a separate maintenance action.

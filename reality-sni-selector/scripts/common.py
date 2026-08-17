@@ -25,7 +25,7 @@ TWO_LEVEL_SUFFIXES = {
 JOB_SCHEMA_VERSION = 4
 WORKER_PROTOCOL = 4
 PROFILE_NAME = "target-measured-v4"
-IMPLEMENTATION_VERSION = "4.2"
+IMPLEMENTATION_VERSION = "4.3.5"
 TARGET_WORKER_FILES = (
     "common.py",
     "target_discovery.py",
@@ -34,6 +34,29 @@ TARGET_WORKER_FILES = (
     "reality_selftest.py",
     "target_worker.py",
 )
+
+PROTOCOL_HARD_CODES = frozenset({
+    "HARD:NO_PUBLIC_IPV4",
+    "HARD:TLS_UNREACHABLE",
+    "HARD:CERT_INVALID",
+    "HARD:CERT_IDENTITY",
+    "HARD:REALITY_MIN_TLS13",
+    "HARD:REALITY_MIN_H2",
+    "HARD:REALITY_CROSS_SITE_REDIRECT",
+})
+SAFETY_HARD_CODES = frozenset({
+    "HARD:KNOWN_PUBLIC_CDN",
+    "HARD:KNOWN_SHARED_PLATFORM",
+})
+RELIABILITY_HARD_CODES = frozenset({
+    "HARD:TLS_SUCCESS_LT_95",
+    "HARD:IP_SUCCESS_LT_90",
+})
+
+PROTOCOL_REVIEW_CODES = frozenset({"REVIEW:REDIRECT_PARSE_FAILED"})
+SAFETY_REVIEW_CODES = frozenset({"REVIEW:EDGE_UNKNOWN"})
+RELIABILITY_REVIEW_CODES = frozenset({"REVIEW:TCP_TLS_UNSTABLE_GATE"})
+OPERATIONAL_REVIEW_CODES = frozenset({"REVIEW:DNS_VOLATILE"})
 
 
 def validate_hostname(value: str) -> str:
@@ -140,7 +163,7 @@ def fetch_bytes(url: str, *, timeout: float = 8.0, max_bytes: int = 1_000_000, h
     request = urllib.request.Request(
         url,
         data=data,
-        headers={"User-Agent": "reality-sni-selector/4.2", **(headers or {})},
+        headers={"User-Agent": "reality-sni-selector/4.3.5", **(headers or {})},
         method="POST" if data is not None else "GET",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:

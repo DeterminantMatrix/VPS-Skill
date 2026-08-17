@@ -1,4 +1,4 @@
-# Architecture v4.2
+# Architecture v4.3.5
 
 ## Control plane vs measurement plane
 
@@ -43,7 +43,7 @@ The job freezes:
 
 - `schema_version: 4`
 - `worker_protocol: 4`
-- `implementation_version: 4.2`
+- `implementation_version: 4.3.5`
 - `expected_worker_manifest`
 
 The readiness probe additionally verifies the reviewed wrapper SHA-256. The measurement worker repeats protocol/version/manifest validation before candidate network traffic.
@@ -61,4 +61,10 @@ The readiness probe additionally verifies the reviewed wrapper SHA-256. The meas
 | candidate DNS/TLS/HEAD/platform | no | yes |
 | fast/deep benchmark | no | yes |
 | local Reality integration | no | yes |
+| decision/ranking artifact rendering | yes | evidence produced on target |
 | final artifact rendering | yes | no |
+
+
+## Adaptive selection and decision layer v4.3.5
+
+The target worker owns adaptive measurement: initial Deep, Reality, and bounded Deep refill from already-Fast-measured eligible survivors until five SELECTABLE results are found or fixed caps are exhausted. The controller deterministically derives decision dimensions/ranking rationale from target-measured evidence and renders `decision-summary.json` and modular `report.md`. The calling model may explain those fields in Chinese, but must follow `reporting.md` and may not replace measured evidence with outside assumptions.

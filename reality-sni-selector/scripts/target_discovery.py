@@ -4,11 +4,35 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import socket
+import time
+import urllib.error
 import urllib.parse
 from collections import defaultdict
 from typing import Any
 
 from common import fetch_json, hostname_from_url, is_public_ipv4, is_service_hostname, registrable_domain, validate_hostname
+
+
+def _source_error(source: str, exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"{source}:HTTPError:{exc.code}"
+    return f"{source}:{type(exc).__name__}"
+
+
+def _fetch_json_one_retry(*args: Any, **kwargs: Any) -> Any:
+    """Retry one transient source failure only; never turn QUICK into a retry loop."""
+    for attempt in range(2):
+        try:
+            return fetch_json(*args, **kwargs)
+        except Exception as exc:
+            transient = isinstance(exc, (TimeoutError, socket.timeout, urllib.error.URLError))
+            if isinstance(exc, urllib.error.HTTPError):
+                transient = exc.code == 429 or 500 <= exc.code <= 599
+            if attempt == 0 and transient:
+                time.sleep(0.35)
+                continue
+            raise
+    raise RuntimeError("unreachable")
 
 
 def resolve_public_ipv4(hostname: str) -> list[str]:
@@ -51,7 +75,7 @@ def wikidata_nearby(lat: float, lon: float, radius_km: int, limit: int = 500) ->
     }} LIMIT {limit}'''
     url = "https://query.wikidata.org/sparql?" + urllib.parse.urlencode({"query": query, "format": "json"})
     try:
-        data = fetch_json(url, timeout=15, max_bytes=2_000_000, headers={"Accept": "application/sparql-results+json"})
+        data = _fetch_json_one_retry(url, timeout=15, max_bytes=2_000_000, headers={"Accept": "application/sparql-results+json"})
         out = []
         for row in data.get("results", {}).get("bindings", []):
             host = hostname_from_url(row.get("website", {}).get("value", ""))
@@ -60,7 +84,7 @@ def wikidata_nearby(lat: float, lon: float, radius_km: int, limit: int = 500) ->
                 out.append((host, label))
         return out, None
     except Exception as exc:
-        return [], f"wikidata:{type(exc).__name__}"
+        return [], _source_error("wikidata", exc)
 
 
 def osm_nearby(lat: float, lon: float, radius_km: int) -> tuple[list[tuple[str, str]], str | None]:
@@ -74,7 +98,7 @@ def osm_nearby(lat: float, lon: float, radius_km: int) -> tuple[list[tuple[str, 
     );out tags center 700;'''
     try:
         body = urllib.parse.urlencode({"data": q}).encode()
-        data = fetch_json("https://overpass-api.de/api/interpreter", timeout=25, max_bytes=3_000_000,
+        data = _fetch_json_one_retry("https://overpass-api.de/api/interpreter", timeout=25, max_bytes=3_000_000,
                           headers={"Content-Type": "application/x-www-form-urlencoded"}, data=body)
         out = []
         for item in data.get("elements", []):
@@ -86,7 +110,7 @@ def osm_nearby(lat: float, lon: float, radius_km: int) -> tuple[list[tuple[str, 
                 out.append((host, label))
         return out, None
     except Exception as exc:
-        return [], f"osm:{type(exc).__name__}"
+        return [], _source_error("osm", exc)
 
 
 def openalex_city(city: str, limit: int = 100) -> tuple[list[tuple[str, str]], str | None]:
@@ -94,7 +118,7 @@ def openalex_city(city: str, limit: int = 100) -> tuple[list[tuple[str, str]], s
         return [], None
     url = "https://api.openalex.org/institutions?" + urllib.parse.urlencode({"search": city, "per-page": min(limit, 100)})
     try:
-        data = fetch_json(url, timeout=12, max_bytes=2_000_000)
+        data = _fetch_json_one_retry(url, timeout=12, max_bytes=2_000_000)
         out = []
         for item in data.get("results", []):
             host = hostname_from_url(item.get("homepage_url") or "")
@@ -102,13 +126,13 @@ def openalex_city(city: str, limit: int = 100) -> tuple[list[tuple[str, str]], s
                 out.append((host, item.get("display_name") or ""))
         return out, None
     except Exception as exc:
-        return [], f"openalex:{type(exc).__name__}"
+        return [], _source_error("openalex", exc)
 
 
 def ct_names(base: str, max_names: int) -> tuple[list[str], str | None]:
     url = "https://crt.sh/?" + urllib.parse.urlencode({"q": f"%.{base}", "output": "json"})
     try:
-        data = fetch_json(url, timeout=12, max_bytes=3_000_000)
+        data = _fetch_json_one_retry(url, timeout=12, max_bytes=3_000_000)
         names: list[str] = []
         seen = set()
         for item in data if isinstance(data, list) else []:
@@ -127,7 +151,7 @@ def ct_names(base: str, max_names: int) -> tuple[list[str], str | None]:
                         return names, None
         return names, None
     except Exception as exc:
-        return [], f"ct:{type(exc).__name__}"
+        return [], _source_error("ct", exc)
 
 
 def discover(job: dict[str, Any], preflight: dict[str, Any]) -> dict[str, Any]:

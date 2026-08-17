@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,11 +16,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import benchmark
 import controller_run
 import reality_selftest
+import target_probe
+import target_discovery
+import decision_view
 from benchmark import apply_deep_policy, deep_rank_key
 from common import mad, percentile, registrable_domain, validate_hostname
 from controller_run import build_job, inventory_guard
 from target_probe import classify_front_door, classify_network_organization
-from target_worker import select_probe_pool, validate_job
+from target_worker import classify_network_affinity, select_deep_refill_batch, select_probe_pool, validate_job
 
 
 class CoreTests(unittest.TestCase):
@@ -56,6 +60,65 @@ class CoreTests(unittest.TestCase):
         review = {"hostname": "review.example", "eligibility": "REVIEW_REQUIRED", "success_rate": 1.0, "p50_ms": 20, "p95_ms": 25, "mad_ms": 1, "front_door": {"class": "UNKNOWN_EDGE_EVIDENCE"}, "per_ip": {}, "sources": []}
         self.assertLess(deep_rank_key(clean), deep_rank_key(review))
 
+    def test_near_tie_p50_uses_tail_latency(self):
+        wmala = {"hostname": "www.wmala.com", "eligibility": "ELIGIBLE", "success_rate": 1.0, "p50_ms": 55.335, "p95_ms": 66.989, "mad_ms": 3.0, "front_door": {"class": "DIRECT_LIKELY"}, "per_ip": {}, "sources": []}
+        lacada = {"hostname": "lacada.com", "eligibility": "ELIGIBLE", "success_rate": 1.0, "p50_ms": 55.340, "p95_ms": 63.968, "mad_ms": 3.0, "front_door": {"class": "DIRECT_LIKELY"}, "per_ip": {}, "sources": []}
+        self.assertLess(deep_rank_key(lacada), deep_rank_key(wmala))
+
+    def test_network_affinity_breaks_otherwise_equal_deep_tie(self):
+        base = {"eligibility": "ELIGIBLE", "success_rate": 1.0, "p50_ms": 40.0, "p95_ms": 45.0, "mad_ms": 1.0, "front_door": {"class": "DIRECT_LIKELY"}, "per_ip": {}, "sources": []}
+        same = {**base, "hostname": "same.example", "network_affinity": {"rank": 0, "grade": "A+", "code": "SAME_ASN"}}
+        other = {**base, "hostname": "other.example", "network_affinity": {"rank": 3, "grade": "C", "code": "DIFFERENT_OR_REMOTE_NETWORK"}}
+        self.assertLess(deep_rank_key(same), deep_rank_key(other))
+
+
+    def test_same_asn_does_not_override_bad_tail(self):
+        base = {"eligibility": "ELIGIBLE", "success_rate": 1.0, "p50_ms": 40.0, "mad_ms": 1.0, "front_door": {"class": "DIRECT_LIKELY"}, "per_ip": {}, "sources": []}
+        same_bad_tail = {**base, "hostname": "same.example", "p95_ms": 90.0, "network_affinity": {"rank": 0, "grade": "A+", "code": "SAME_ASN"}}
+        other_good_tail = {**base, "hostname": "other.example", "p95_ms": 45.0, "network_affinity": {"rank": 3, "grade": "C", "code": "DIFFERENT_OR_REMOTE_NETWORK"}}
+        self.assertLess(deep_rank_key(other_good_tail), deep_rank_key(same_bad_tail))
+
+    def test_deep_protocol_downgrade_updates_protocol_state(self):
+        row = {
+            "hostname": "a.example", "eligibility": "ELIGIBLE", "hard_rejections": [],
+            "success_rate": 1.0, "per_ip": {"1.1.1.1": {"samples": 3, "success_rate": 1.0}},
+            "samples": [
+                {"success": True, "tls_version": "TLSv1.3", "alpn": "h2"},
+                {"success": True, "tls_version": "TLSv1.2", "alpn": "h2"},
+            ],
+            "protocol_compliance": {"state": "PASS", "tls13": True, "h2": True, "hard_failures": []},
+        }
+        out = apply_deep_policy(row)
+        self.assertIn("HARD:REALITY_MIN_TLS13", out["hard_rejections"])
+        self.assertEqual(out["protocol_compliance"]["state"], "FAIL")
+        self.assertFalse(out["protocol_compliance"]["tls13"])
+
+    def test_protocol_failure_is_separate_from_safety_policy_grade(self):
+        row = {
+            "hostname": "legacy.example", "final_state": "PROTOCOL_REJECTED",
+            "hard_rejections": ["HARD:REALITY_MIN_TLS13"], "review": [],
+            "protocol_compliance": {"state": "FAIL", "tls13": False, "h2": True, "hard_failures": ["HARD:REALITY_MIN_TLS13"]},
+            "success_rate": 1.0, "sample_count": 20, "per_ip": {},
+        }
+        out = decision_view._enrich_candidate(row, search_confidence="HIGH", search_reasons=[], latency_target_ms=60.0, selectable=False)
+        self.assertEqual(out["protocol_compliance_grade"], "FAIL")
+        self.assertEqual(out["policy_grade"], "PASS")
+        self.assertEqual(out["protocol_hard_rejections"], ["HARD:REALITY_MIN_TLS13"])
+        self.assertEqual(out["safety_hard_rejections"], [])
+
+    def test_transient_source_fetch_retries_once(self):
+        with patch.object(target_discovery, "fetch_json", side_effect=[urllib.error.URLError("timeout"), {"ok": True}]) as mocked, patch.object(target_discovery.time, "sleep"):
+            out = target_discovery._fetch_json_one_retry("https://example.invalid")
+        self.assertEqual(out, {"ok": True})
+        self.assertEqual(mocked.call_count, 2)
+
+    def test_nontransient_source_http_error_does_not_retry(self):
+        err = urllib.error.HTTPError("https://example.invalid", 404, "not found", {}, None)
+        with patch.object(target_discovery, "fetch_json", side_effect=err) as mocked, patch.object(target_discovery.time, "sleep"):
+            with self.assertRaises(urllib.error.HTTPError):
+                target_discovery._fetch_json_one_retry("https://example.invalid")
+        self.assertEqual(mocked.call_count, 1)
+
     def test_fixed_elf_precedes_path_wrapper(self):
         with tempfile.TemporaryDirectory() as td:
             binary = Path(td) / "sing-box"
@@ -74,7 +137,12 @@ class CoreTests(unittest.TestCase):
             guard = inventory_guard(p, "155.254.127.55")
         job = build_job(guard, [], "old.example", "explicit", worker_manifest="a" * 64)
         validate_job(json.loads(json.dumps(job)))
-        self.assertEqual((job["implementation_version"], job["limits"]["eligibility_pool"], job["limits"]["fast_samples"]), ("4.2", 60, 3))
+        self.assertEqual((job["implementation_version"], job["profile"]["coverage_goal"], job["limits"]["eligibility_pool"], job["limits"]["fast_pool"], job["limits"]["deep_pool"], job["limits"]["deep_pool_cap"], job["limits"]["deep_refill_batch"], job["limits"]["reality_candidate_cap"]), ("4.3.5", 200, 80, 36, 10, 18, 4, 16))
+
+    def test_quick_profile_freezes_near_tie_window(self):
+        job = build_job(self._guard(), [], "old.example", "explicit", worker_manifest="a" * 64)
+        self.assertEqual(job["profile"]["p50_equivalence_ms"], 2.0)
+        validate_job(json.loads(json.dumps(job)))
 
     def test_audit_profile(self):
         job = build_job(self._guard(), [], "old.example", "explicit", worker_manifest="a" * 64, profile_mode="audit")
@@ -117,7 +185,10 @@ class CoreTests(unittest.TestCase):
         old = json.dumps({"schema_version": 3}).encode()
         with patch.object(controller_run.subprocess, "Popen", return_value=P(old)):
             self.assertEqual(controller_run.run_remote("best-vm-us", job, 60)[1], "TARGET_WORKER_VERSION_MISMATCH")
-        wrong = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.2", "manifest": "b" * 64}}).encode()
+        stale = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.2", "manifest": "b" * 64}}).encode()
+        with patch.object(controller_run.subprocess, "Popen", return_value=P(stale)):
+            self.assertEqual(controller_run.run_remote("best-vm-us", job, 60)[1], "TARGET_WORKER_VERSION_MISMATCH")
+        wrong = json.dumps({"schema_version": 4, "worker": {"protocol": 4, "implementation_version": "4.3.5", "manifest": "b" * 64}}).encode()
         with patch.object(controller_run.subprocess, "Popen", return_value=P(wrong)):
             self.assertEqual(controller_run.run_remote("best-vm-us", job, 60)[1], "TARGET_WORKER_BUILD_MISMATCH")
 
@@ -130,6 +201,39 @@ class CoreTests(unittest.TestCase):
         ]
         selected, _ = select_probe_pool(rows, "old.example", 3)
         self.assertEqual(len({registrable_domain(r["hostname"]) for r in selected}), 3)
+
+    def test_tls13_and_h2_are_reality_protocol_hard_gates(self):
+        candidate = {"hostname": "legacy.example", "sources": ["seed"], "organizations": []}
+        with patch.object(target_probe, "resolve_ipv4_observations", return_value={"common_ipv4": ["1.1.1.1"], "union_ipv4": ["1.1.1.1"], "volatile": False, "errors": []}), \
+             patch.object(target_probe, "tls_probe_ip", return_value={"success": True, "ip": "1.1.1.1", "elapsed_ms": 20.0, "tls_version": "TLSv1.2", "alpn": "http/1.1"}), \
+             patch.object(target_probe, "dig_cname", return_value=([], "dig")), \
+             patch.object(target_probe, "http_head_ip", return_value={"success": True, "status": 200, "headers": {}}):
+            row = target_probe.gate_candidate(candidate, tls_samples_per_ip=1)
+        self.assertIn("HARD:REALITY_MIN_TLS13", row["hard_rejections"])
+        self.assertIn("HARD:REALITY_MIN_H2", row["hard_rejections"])
+        self.assertEqual(row["protocol_compliance"]["state"], "FAIL")
+
+    def test_cross_site_redirect_is_reality_protocol_hard_gate(self):
+        candidate = {"hostname": "www.example.org", "sources": ["seed"], "organizations": []}
+        with patch.object(target_probe, "resolve_ipv4_observations", return_value={"common_ipv4": ["1.1.1.1"], "union_ipv4": ["1.1.1.1"], "volatile": False, "errors": []}), \
+             patch.object(target_probe, "tls_probe_ip", return_value={"success": True, "ip": "1.1.1.1", "elapsed_ms": 20.0, "tls_version": "TLSv1.3", "alpn": "h2"}), \
+             patch.object(target_probe, "dig_cname", return_value=([], "dig")), \
+             patch.object(target_probe, "http_head_ip", return_value={"success": True, "status": 302, "headers": {"location": "https://other.example.net/"}}):
+            row = target_probe.gate_candidate(candidate, tls_samples_per_ip=1)
+        self.assertIn("HARD:REALITY_CROSS_SITE_REDIRECT", row["hard_rejections"])
+        self.assertEqual(row["protocol_compliance"]["redirect_policy"], "FAIL")
+
+    def test_same_asn_is_network_affinity_bonus(self):
+        same = classify_network_affinity("2.27.212.12", {"asn": 4837, "organization": "Target", "country_code": "US"}, {"asn": 4837, "organization": "Other", "country_code": "US"}, ["23.1.2.3"])
+        other = classify_network_affinity("2.27.212.12", {"asn": 4837, "organization": "Target", "country_code": "US"}, {"asn": 9999, "organization": "Other", "country_code": "US"}, ["23.1.2.3"])
+        self.assertEqual((same["grade"], same["code"], same["rank"]), ("A+", "SAME_ASN", 0))
+        self.assertLess(same["rank"], other["rank"])
+
+    def test_deep_refill_takes_next_fast_survivors_without_duplicates(self):
+        fast = [{"hostname": f"d{i}.example", "eligibility": "ELIGIBLE", "hard_rejections": [], "incumbent": False} for i in range(1, 8)]
+        deep = fast[:2]
+        refill = select_deep_refill_batch(fast, deep, batch_size=4, deep_cap=5)
+        self.assertEqual([row["hostname"] for row in refill], ["d3.example", "d4.example", "d5.example"])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# Managed worker lifecycle v4.2
+# Managed worker lifecycle v4.3.5
 
 The user selects a VPS; the Skill owns readiness of its own fixed target worker. Worker readiness is a **pre-freeze control-plane step**, not candidate measurement.
 
@@ -11,7 +11,7 @@ The user selects a VPS; the Skill owns readiness of its own fixed target worker.
 /usr/local/bin/reality-sni-target-worker identity
 ```
 
-3. Require protocol 4, implementation 4.2, the exact six-file worker manifest, and the exact reviewed wrapper hash.
+3. Require protocol 4, implementation 4.3.5, the exact six-file worker manifest, and the exact reviewed wrapper hash.
 4. If exact, continue without writes.
 5. If absent/stale/legacy and `--worker-bootstrap auto` is enabled, bootstrap or upgrade only the managed worker paths.
 6. Probe identity again. Freeze the SNI job only after exact readiness.
@@ -48,7 +48,7 @@ Automatic installation is allowed when both managed paths are absent.
 Automatic upgrade is allowed when either:
 
 - `.managed.json` identifies `managed_by: reality-sni-selector`; or
-- the six-file manifest and wrapper hash exactly match a reviewed pre-marker v4/v4.1 installation.
+- the six-file manifest/wrapper hash exactly matches a reviewed pre-marker v4/v4.1 install.
 
 If files already occupy the fixed paths but cannot be proven to be a managed/known-legacy installation, return:
 
