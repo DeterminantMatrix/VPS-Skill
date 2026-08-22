@@ -107,6 +107,38 @@ def _protocol_details(row: dict[str, Any]) -> str:
     return f"{tls13} / {h2} / cert:{cert} / redirect:{redirect}"
 
 
+def _certificate_validity(row: dict[str, Any]) -> str:
+    """Report the shortest observed certificate validity without inventing missing data."""
+    records: list[dict[str, Any]] = []
+    direct = row.get("certificate")
+    if isinstance(direct, dict):
+        records.append(direct)
+    for key in ("tls", "samples"):
+        values = row.get(key) or []
+        if isinstance(values, dict):
+            values = [values]
+        for value in values:
+            if isinstance(value, dict) and isinstance(value.get("certificate"), dict):
+                records.append(value["certificate"])
+    observed = []
+    for cert in records:
+        days = cert.get("days_remaining")
+        if days is None and not cert.get("not_after"):
+            continue
+        try:
+            numeric_days = float(days) if days is not None else None
+        except (TypeError, ValueError):
+            numeric_days = None
+        observed.append((numeric_days, str(cert.get("not_after") or "unknown")))
+    if not observed:
+        return "unknown"
+    with_days = [item for item in observed if item[0] is not None]
+    if with_days:
+        days, not_after = min(with_days, key=lambda item: item[0])
+        return f"{days:.2f} 天剩余（{not_after}）"
+    return f"到期时间 {observed[0][1]}"
+
+
 def _tls_versions(row: dict[str, Any]) -> str:
     versions = row.get("tls_versions") or []
     alpn = row.get("alpn_protocols") or []
@@ -125,5 +157,4 @@ def _network_affinity(row: dict[str, Any]) -> str:
     grade = row.get("network_affinity_grade") or affinity.get("grade") or "UNKNOWN"
     code = row.get("network_affinity_code") or affinity.get("code") or "NETWORK_AFFINITY_UNKNOWN"
     return f"{grade}/{code}"
-
 

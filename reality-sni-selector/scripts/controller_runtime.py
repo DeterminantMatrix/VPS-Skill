@@ -17,6 +17,7 @@ import yaml
 
 import controller_core as core
 import worker_lifecycle as lifecycle
+from dependency_lifecycle import ensure_dig, restore_dig
 from common import (
     IMPLEMENTATION_VERSION,
     JOB_SCHEMA_VERSION,
@@ -331,6 +332,17 @@ def main() -> int:
         print("TARGET_MEASURED_RUN_STATUS:WORKER_READY_ONLY")
         return 0
 
+    dependency_lifecycle = ensure_dig(guard["alias"])
+    atomic_write_json(run_dir / "dependency-lifecycle.json", dependency_lifecycle)
+    with stage_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"dig_dependency\t{'OK' if dependency_lifecycle.get('ok') else 'FAILED'}\t"
+            f"{dependency_lifecycle.get('status')}:{dependency_lifecycle.get('action')}\n"
+        )
+    if not dependency_lifecycle.get("ok"):
+        _write_blocked(run_dir, stage_path, str(dependency_lifecycle.get("status") or "DIG_DEPENDENCY_FAILED"), guard=guard, controller_meta=controller_meta, lifecycle_meta=worker_lifecycle)
+        return 3
+
     try:
         seed_path = args.seed_file or core.auto_seed_file(root, guard.get("region"))
         seeds = core.load_seeds(seed_path)
@@ -343,6 +355,8 @@ def main() -> int:
         manifest = str(worker_lifecycle["expected_manifest"])
         job = core.build_job(guard, seeds, incumbent, incumbent_mode, worker_manifest=manifest, profile_mode=args.profile)
     except Exception as exc:
+        dependency_lifecycle = restore_dig(guard["alias"], dependency_lifecycle)
+        atomic_write_json(run_dir / "dependency-lifecycle.json", dependency_lifecycle)
         with stage_path.open("a", encoding="utf-8") as handle:
             handle.write(f"freeze_input\tFAILED\t{type(exc).__name__}\n")
         _write_blocked(run_dir, stage_path, "FREEZE_INPUT_FAILED", guard=guard, controller_meta=controller_meta, lifecycle_meta=worker_lifecycle)
@@ -353,6 +367,19 @@ def main() -> int:
         handle.write(f"freeze\tOK\t{args.profile} profile frozen only after exact worker readiness\n")
 
     result, remote_status, diagnostics = run_remote(guard["alias"], job, max(60, args.ssh_timeout))
+    dependency_lifecycle = restore_dig(guard["alias"], dependency_lifecycle)
+    atomic_write_json(run_dir / "dependency-lifecycle.json", dependency_lifecycle)
+    with stage_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"dig_cleanup\t{'OK' if dependency_lifecycle.get('cleanup', {}).get('ok') else 'FAILED'}\t"
+            f"{dependency_lifecycle.get('cleanup', {}).get('status')}\n"
+        )
+    if not dependency_lifecycle.get("cleanup", {}).get("ok"):
+        diagnostics["failure_detail"] = "TARGET_DIRTY_STATE"
+        if result is None:
+            remote_status = "TARGET_DIRTY_STATE"
+        if isinstance(result, dict):
+            result["warnings"] = sorted(set(list(result.get("warnings") or []) + ["TARGET_DIRTY_STATE"]))
     with stage_path.open("a", encoding="utf-8") as handle:
         handle.write(f"target_worker\t{remote_status}\t{diagnostics.get('failure_detail') or 'fixed absolute worker run command'}\n")
     controller_meta["remote_diagnostics"] = diagnostics
@@ -362,6 +389,8 @@ def main() -> int:
 
     result = dict(result)
     result["controller"] = controller_meta
+    if not dependency_lifecycle.get("cleanup", {}).get("ok"):
+        result["warnings"] = sorted(set(list(result.get("warnings") or []) + ["TARGET_DIRTY_STATE"]))
     if resolution.get("warning"):
         result["warnings"] = sorted(set(list(result.get("warnings") or []) + [resolution["warning"]]))
     atomic_write_json(run_dir / "target-result.json", result)
@@ -380,7 +409,7 @@ def main() -> int:
         "comparison.json": result.get("comparison", []),
         "incumbent-assessment.json": result.get("incumbent_assessment", {}),
         "top5.json": {"status": result.get("status"), "coverage": result.get("coverage", {}), "network_affinity_search": result.get("network_affinity_search", {}), "top5": result.get("top5", []), "preliminary_top5": result.get("preliminary_top5", []), "comparison": result.get("comparison", [])},
-        "run-metadata.json": {"status": result.get("status"), "worker": result.get("worker", {}), "guard": guard, "controller": controller_meta, "worker_lifecycle": worker_lifecycle, "controller_frozen_run": job, "target_frozen_run": result.get("frozen_run", {}), "coverage": result.get("coverage", {}), "counts": result.get("counts", {}), "warnings": result.get("warnings", [])},
+        "run-metadata.json": {"status": result.get("status"), "worker": result.get("worker", {}), "guard": guard, "controller": controller_meta, "worker_lifecycle": worker_lifecycle, "dependency_lifecycle": dependency_lifecycle, "controller_frozen_run": job, "target_frozen_run": result.get("frozen_run", {}), "coverage": result.get("coverage", {}), "counts": result.get("counts", {}), "warnings": result.get("warnings", [])},
     }
     for name, payload in mapping.items():
         atomic_write_json(run_dir / name, payload)

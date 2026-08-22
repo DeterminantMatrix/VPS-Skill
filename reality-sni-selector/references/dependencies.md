@@ -26,12 +26,12 @@ Required:
 - `curl` for the loopback Reality HEAD integration test
 - `sing-box` for final Reality integration
 
-Optional but recommended:
+Optional but recommended for ordinary runs:
 
 - `dig` for CNAME evidence
 
-If `dig` is absent, edge evidence may become `REVIEW:EDGE_UNKNOWN`; missing tooling is not proof of DIRECT and is not automatically proof of public CDN.
+If `dig` is absent, edge evidence may become `REVIEW:EDGE_UNKNOWN`; missing tooling is not proof of DIRECT and is not automatically proof of public CDN. On supported apt targets, the controller automatically installs the smallest package that provides `dig` when the command is absent or fails its functional probe. It records the package/command state first, removes packages introduced solely for that run immediately after measurement, and verifies restoration; do not use broad `autoremove` or remove a pre-existing/shared package. Unsupported package managers, an unknown broken binary, failed installation, or uncertain cleanup is a run-level `TARGET_DIRTY_STATE`/blocked condition and must be reported.
 
 ## Installation boundary
 
-v4.5 may bootstrap or upgrade only its own fixed worker files; this is not a system-package installation. Installing missing Python/curl/sing-box/dig packages, changing sudo/SSH privileges, or repairing unrelated system state remains a separate maintenance action.
+v4.5 may bootstrap or upgrade only its own fixed worker files; this is not a system-package installation. Installing missing Python/curl/sing-box packages, changing sudo/SSH privileges, or repairing unrelated system state remains a separate maintenance action. The temporary `dig` exception is limited to the requested SNI measurement and must leave no newly installed package behind.

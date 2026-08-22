@@ -24,6 +24,7 @@ class ReportTests(unittest.TestCase):
             "policy_grade": "PASS",
             "front_door": {"class": "DIRECT_LIKELY"},
             "protocol_compliance": {"state": "PASS", "tls13": True, "h2": True, "certificate": "PASS", "redirect_policy": "PASS", "per_ip": {"1.1.1.1": {"tls13": True, "h2": True, "tls_versions": ["TLSv1.3"], "alpn": ["h2"]}}},
+            "samples": [{"success": True, "certificate": {"days_remaining": 123.45, "not_after": "Dec 31 23:59:59 2026 GMT"}}],
             "tls_versions": ["TLSv1.3"],
             "alpn_protocols": ["h2"],
             "success_rate": 1.0,
@@ -105,6 +106,8 @@ class ReportTests(unittest.TestCase):
         self.assertIn("REALITY Protocol", text)
         self.assertIn("TLS / ALPN", text)
         self.assertIn("Network affinity", text)
+        self.assertIn("证书有效期", text)
+        self.assertIn("123.45 天剩余", text)
 
     def test_report_shows_sample_reuse(self):
         text = render_report(self._result())

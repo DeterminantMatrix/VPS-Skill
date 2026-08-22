@@ -6,6 +6,7 @@ from decision_view import build_decision_view
 from report_format import (
     _asn_org,
     _assessment_metrics,
+    _certificate_validity,
     _confidence_zh,
     _fmt,
     _front,
@@ -54,11 +55,11 @@ def render_report(result: dict[str, Any]) -> str:
     assessment = view["incumbent_assessment"]
     decision = view["decision_summary"]
     top = view["top5"]
-    current_row = _current_card_row(assessment)
     refill = (result.get("reality") or {}).get("adaptive_refill") or {}
 
     best = top[0] if top else None
     current_host = assessment.get("hostname") or frozen.get("incumbent") or "unknown"
+    current_row = next((row for row in comparison if row.get("hostname") == current_host), _current_card_row(assessment))
     current_verdict = assessment.get("verdict", "暂无法评估")
     keep_current = current_verdict in {"继续使用", "可继续使用，但有优化空间", "暂可继续使用，建议复核"}
 
@@ -83,6 +84,7 @@ def render_report(result: dict[str, Any]) -> str:
         f"| 最终评价 | **{current_verdict}** (`{assessment.get('code', 'UNABLE_TO_ASSESS')}`) |",
         f"| REALITY Protocol | `{(assessment.get('metrics') or {}).get('protocol_compliance', {}).get('state', 'UNKNOWN')}` — {_protocol_details(current_row)} |",
         f"| TLS / ALPN | `{_tls_versions(current_row)}` |",
+        f"| 证书有效期 | {_certificate_validity(current_row)} |",
         f"| Policy hard reject | {', '.join(f'`{v}`' for v in ((assessment.get('metrics') or {}).get('hard_rejections') or [])) or '无'} |",
         f"| Reality control | `{((assessment.get('metrics') or {}).get('reality_control') or 'NOT_RUN')}` |",
         f"| TLS / P50 / P95 / MAD | {_assessment_metrics(assessment)} |",
@@ -101,12 +103,12 @@ def render_report(result: dict[str, Any]) -> str:
         "",
         "Top 5 默认要求 5 个不同 registrable-domain family；同一根域的 `www`/apex 只作为 family alternative，不重复占主表位置。",
         "",
-        "| # | SNI / Family | 梯队 | 推荐 | Protocol | TLS / ALPN | Policy | Reality | P50 / P95 | TLS可靠性 / 延迟一致性 | Network | Front Door | 风险 | 综合置信度 |",
-        "|---:|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| # | SNI / Family | 梯队 | 推荐 | Protocol | TLS / ALPN | 证书有效期 | Policy | Reality | P50 / P95 | TLS可靠性 / 延迟一致性 | Network | Front Door | 风险 | 综合置信度 |",
+        "|---:|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ])
     for row in top:
         lines.append(
-            "| {rank} | `{host}` | `{tier}` | **{grade} {label}** | `{protocol}` | `{tlsver}` | `{policy}` | `{reality}` | {p50} / {p95} | `{tls_rel}` / `{stability}` | `{network}` | `{front}` | `{risk}` | `{confidence}` |".format(
+            "| {rank} | `{host}` | `{tier}` | **{grade} {label}** | `{protocol}` | `{tlsver}` | {cert_validity} | `{policy}` | `{reality}` | {p50} / {p95} | `{tls_rel}` / `{stability}` | `{network}` | `{front}` | `{risk}` | `{confidence}` |".format(
                 rank=row.get("recommendation_rank", "?"),
                 host=f"{row.get('hostname', 'unknown')} / {row.get('candidate_family') or row.get('hostname', 'unknown')}",
                 tier=row.get("recommendation_tier", "unknown"),
@@ -114,6 +116,7 @@ def render_report(result: dict[str, Any]) -> str:
                 label=row.get("recommendation_label", ""),
                 protocol=_protocol_label(row),
                 tlsver=_tls_versions(row),
+                cert_validity=_certificate_validity(row),
                 policy=_policy_label(row),
                 reality=_reality_label(row),
                 p50=_fmt(row.get("p50_ms"), " ms"),
@@ -141,6 +144,7 @@ def render_report(result: dict[str, Any]) -> str:
             f"### {row.get('recommendation_rank', '?')}. `{row.get('hostname')}` — {row.get('recommendation_grade', '?')} {row.get('recommendation_label', '')}",
             "",
             f"- **Protocol**：`{_protocol_label(row)}` — {_protocol_details(row)}；观测 TLS/ALPN：`{_tls_versions(row)}`。",
+            f"- **证书有效期**：{_certificate_validity(row)}。",
             f"- **Safety / Policy**：`{_policy_label(row)}`；Front Door：`{_front(row)}`；ASN/组织：`{_asn_org(row)}`。",
             f"- **Reality**：`{_reality_label(row)}`；Final：`{row.get('final_state') or row.get('final')}`。",
             f"- **Reliability**：TLS transport `{_pct(row.get('success_rate'))}` / grade `{row.get('tls_reliability_grade', row.get('tls_grade', 'unknown'))}`；Reality `{row.get('reality_grade', 'unknown')}`；延迟一致性 `{row.get('latency_consistency_grade', row.get('runtime_stability_grade', 'unknown'))}`。",
@@ -230,18 +234,19 @@ def render_report(result: dict[str, Any]) -> str:
         "",
         "该表用于审计；非 SELECTABLE 项只作为对照，不得被模型包装成推荐候选。",
         "",
-        "| Rank | Domain | Final / Policy | Protocol | TLS/ALPN | Reality | P50 | P95 | MAD | Network | Front door | ASN / org | vs current P50 |",
-        "|---:|---|---|---|---|---|---:|---:|---:|---|---|---|---:|",
+        "| Rank | Domain | Final / Policy | Protocol | TLS/ALPN | 证书有效期 | Reality | P50 | P95 | MAD | Network | Front door | ASN / org | vs current P50 |",
+        "|---:|---|---|---|---|---|---|---:|---:|---:|---|---|---|---:|",
     ])
     for row in comparison:
         lines.append(
-            "| {rank} | `{host}` | `{final}` / `{policy}` | `{protocol}` | `{tlsver}` | `{reality}` | {p50} | {p95} | {mad} | `{network}` | `{front}` | `{asn}` | {improve} |".format(
+            "| {rank} | `{host}` | `{final}` / `{policy}` | `{protocol}` | `{tlsver}` | {cert_validity} | `{reality}` | {p50} | {p95} | {mad} | `{network}` | `{front}` | `{asn}` | {improve} |".format(
                 rank=row.get("recommendation_rank", "?"),
                 host=f"{row.get('hostname', 'unknown')} / {row.get('candidate_family') or row.get('hostname', 'unknown')}",
                 final=row.get("final_state", "unknown"),
                 policy=row.get("policy_eligibility", row.get("eligibility", "unknown")),
                 protocol=_protocol_label(row),
                 tlsver=_tls_versions(row),
+                cert_validity=_certificate_validity(row),
                 reality=_reality(row),
                 p50=_fmt(row.get("p50_ms"), " ms"),
                 p95=_fmt(row.get("p95_ms"), " ms"),

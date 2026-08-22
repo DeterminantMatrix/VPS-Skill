@@ -7,6 +7,7 @@ Normal SNI selection may:
 - read inventory;
 - probe the fixed worker identity;
 - install/upgrade the Skill's own reviewed worker at its fixed managed paths when absent/stale;
+- install and remove an automatic temporary apt `dig` measurement dependency, with pre-state recording and cleanup verification;
 - back up an existing managed/recognized-legacy worker and verify hashes;
 - freeze only after exact readiness;
 - invoke `/usr/local/bin/reality-sni-target-worker run` for bounded target-side discovery/probes;
@@ -16,7 +17,7 @@ It must not:
 
 - overwrite unknown files at the worker paths;
 - edit the Skill source, AGENTS/memory/project documentation, or Git history;
-- install system packages;
+- install system packages outside the temporary measurement-dependency exception;
 - alter production sing-box, services, firewall, routing, SSH, or networking.
 
 `--worker-bootstrap never` keeps selection read-only with respect to worker files and fails if the exact worker is not ready.
